@@ -1,0 +1,74 @@
+fn factorial(n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn fibonacci(n) {
+    if (n <= 0) {
+        return 0;
+    }
+    if (n == 1) {
+        return 1;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+fn sum(n) {
+    var total = 0;
+    var i = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+var x = 5;
+var y = 10;
+var z = x + y;
+
+print "Factorial calculation:";
+print factorial(5);
+
+print "Fibonacci calculation:";
+print fibonacci(10);
+print "Sum calculation (using while loop):";
+print sum(100);
+var result = (x + y) * (z - 5);
+print "Complex arithmetic result:";
+print result;
+
+print "Hello, world!";
+
+print "Comparison results:";
+print x < y;
+print x > y;
+print x == 5;
+print y != 10;
+
+print "Nested if-else demonstration:";
+if (x < 10) {
+    if (y > 5) {
+        print "Both conditions are true";
+    } else {
+        print "Only first condition is true";
+    }
+} else {
+    print "First condition is false";
+}
+
+fn findFirstMultipleOf7(max) {
+    var i = 1;
+    while (i <= max) {
+        if (i % 7 == 0) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+print "First multiple of 7:";
+print findFirstMultipleOf7(20);

@@ -1,0 +1,2155 @@
+// package main
+//
+// import (
+// 	"fmt"
+// 	"os"
+// 	"os/exec"
+// 	"path/filepath"
+// 	"strconv"
+// 	"strings"
+//
+// 	"github.com/llir/llvm/ir"
+// 	"github.com/llir/llvm/ir/constant"
+// 	"github.com/llir/llvm/ir/enum"
+// 	"github.com/llir/llvm/ir/types"
+// 	"github.com/llir/llvm/ir/value"
+// )
+//
+// // TokenType represents different token types in our language
+// type TokenType int
+//
+// const (
+// 	// Literals and identifiers
+// 	NUMBER TokenType = iota
+// 	IDENTIFIER
+// 	STRING
+//
+// 	// Operators
+// 	PLUS
+// 	MINUS
+// 	MULTIPLY
+// 	DIVIDE
+// 	ASSIGN
+// 	EQUAL
+// 	NOTEQUAL
+// 	LESS
+// 	GREATER
+// 	LESSEQUAL
+// 	GREATEREQUAL
+//
+// 	// Delimiters
+// 	LPAREN
+// 	RPAREN
+// 	LBRACE
+// 	RBRACE
+// 	COMMA
+// 	SEMICOLON
+//
+// 	// Keywords
+// 	FUNCTION
+// 	VAR
+// 	IF
+// 	ELSE
+// 	WHILE
+// 	RETURN
+// 	PRINT
+//
+// 	// Special tokens
+// 	EOF
+// 	MODULO TokenType = iota + GREATEREQUAL + 1
+// )
+//
+// // Token represents a lexical token in our language
+// type Token struct {
+// 	Type    TokenType
+// 	Literal string
+// }
+//
+// // Lexer converts input string to tokens
+// type Lexer struct {
+// 	input        string
+// 	position     int
+// 	readPosition int
+// 	ch           byte
+// }
+//
+// // NewLexer creates a new lexer instance
+// func NewLexer(input string) *Lexer {
+// 	l := &Lexer{input: input}
+// 	l.readChar()
+// 	return l
+// }
+//
+// // readChar reads the next character and advances the position
+// func (l *Lexer) readChar() {
+// 	if l.readPosition >= len(l.input) {
+// 		l.ch = 0 // EOF
+// 	} else {
+// 		l.ch = l.input[l.readPosition]
+// 	}
+// 	l.position = l.readPosition
+// 	l.readPosition++
+// }
+//
+// // peekChar looks at the next character without advancing
+// func (l *Lexer) peekChar() byte {
+// 	if l.readPosition >= len(l.input) {
+// 		return 0
+// 	}
+// 	return l.input[l.readPosition]
+// }
+//
+// // skipWhitespace skips whitespace characters
+// func (l *Lexer) skipWhitespace() {
+// 	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+// 		l.readChar()
+// 	}
+// }
+//
+// // readIdentifier reads an identifier
+// func (l *Lexer) readIdentifier() string {
+// 	position := l.position
+// 	for isLetter(l.ch) || isDigit(l.ch) {
+// 		l.readChar()
+// 	}
+// 	return l.input[position:l.position]
+// }
+//
+// // readNumber reads a number
+// func (l *Lexer) readNumber() string {
+// 	position := l.position
+// 	for isDigit(l.ch) {
+// 		l.readChar()
+// 	}
+// 	return l.input[position:l.position]
+// }
+//
+// // readString reads a string literal
+// func (l *Lexer) readString() string {
+// 	// Skip the opening quote
+// 	l.readChar()
+//
+// 	position := l.position
+// 	for l.ch != '"' && l.ch != 0 {
+// 		l.readChar()
+// 	}
+//
+// 	value := l.input[position:l.position]
+//
+// 	// Skip the closing quote
+// 	if l.ch == '"' {
+// 		l.readChar()
+// 	}
+//
+// 	return value
+// }
+//
+// // isLetter checks if a character is a letter or underscore
+// func isLetter(ch byte) bool {
+// 	return ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z') || ch == '_'
+// }
+//
+// // isDigit checks if a character is a digit
+// func isDigit(ch byte) bool {
+// 	return '0' <= ch && ch <= '9'
+// }
+//
+// // LookupIdentifier checks if an identifier is a keyword
+// func LookupIdentifier(ident string) TokenType {
+// 	keywords := map[string]TokenType{
+// 		"fn":     FUNCTION,
+// 		"var":    VAR,
+// 		"if":     IF,
+// 		"else":   ELSE,
+// 		"while":  WHILE,
+// 		"return": RETURN,
+// 		"print":  PRINT,
+// 	}
+//
+// 	if tok, ok := keywords[ident]; ok {
+// 		return tok
+// 	}
+// 	return IDENTIFIER
+// }
+//
+// func (p *Parser) parseWhileStatement() Expression {
+// 	stmt := &WhileStatement{Token: p.curToken}
+// 	if !p.expectPeek(LPAREN) {
+// 		return nil
+// 	}
+// 	p.nextToken()
+// 	stmt.Condition = p.parseExpression(LOWEST)
+// 	if !p.expectPeek(RPAREN) {
+// 		return nil
+// 	}
+// 	if !p.expectPeek(LBRACE) {
+// 		return nil
+// 	}
+// 	stmt.Body = p.parseBlockStatement()
+// 	return stmt
+// }
+//
+// type WhileStatement struct {
+// 	Token     Token // the 'while' token
+// 	Condition Expression
+// 	Body      *BlockStatement
+// }
+//
+// func (ws *WhileStatement) statementNode()       {}
+// func (ws *WhileStatement) TokenLiteral() string { return ws.Token.Literal }
+// func (ws *WhileStatement) String() string {
+// 	var out strings.Builder
+// 	out.WriteString("while")
+// 	out.WriteString("(")
+// 	out.WriteString(ws.Condition.String())
+// 	out.WriteString(") ")
+// 	out.WriteString(ws.Body.String())
+// 	return out.String()
+// }
+//
+// // compileWhileStatement compiles a while loop
+// func (c *Compiler) compileWhileStatement(stmt *WhileStatement) error {
+// 	// Create the necessary blocks
+// 	condBlock := c.currentFunction.NewBlock("while.cond")
+// 	bodyBlock := c.currentFunction.NewBlock("while.body")
+// 	endBlock := c.currentFunction.NewBlock("while.end")
+//
+// 	// Branch to the condition block
+// 	c.block.NewBr(condBlock)
+//
+// 	// Compile the condition
+// 	c.block = condBlock
+// 	condValue, err := c.compileExpression(stmt.Condition)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	// Convert condition to boolean if needed
+// 	var condBool value.Value
+// 	if condValue.Type().Equal(types.I1) {
+// 		condBool = condValue
+// 	} else {
+// 		// Otherwise, compare with zero
+// 		zero := constant.NewInt(types.I64, 0)
+// 		condBool = c.block.NewICmp(enum.IPredNE, condValue, zero)
+// 	}
+//
+// 	// Branch based on condition
+// 	condBlock.NewCondBr(condBool, bodyBlock, endBlock)
+//
+// 	// Compile the body
+// 	c.block = bodyBlock
+// 	err = c.compileStatement(stmt.Body)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	// Jump back to condition if body doesn't end with a return
+// 	if bodyBlock.Term == nil {
+// 		bodyBlock.NewBr(condBlock)
+// 	}
+//
+// 	// Continue compilation in the end block
+// 	c.block = endBlock
+//
+// 	return nil
+// } // compileIfStatement compiles an if statement
+// func (c *Compiler) compileIfStatement(stmt *IfStatement) error {
+// 	// Create basic blocks for the branches
+// 	currentFunc := c.currentFunction
+// 	thenBlock := currentFunc.NewBlock("if.then")
+//
+// 	var elseBlock *ir.Block
+// 	if stmt.Alternative != nil {
+// 		elseBlock = currentFunc.NewBlock("if.else")
+// 	}
+//
+// 	// Create a merge block that continues after the if statement
+// 	mergeBlock := currentFunc.NewBlock("if.end")
+//
+// 	// Compile the condition
+// 	condValue, err := c.compileExpression(stmt.Condition)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	// Create a comparison to convert the condition to a boolean (i1)
+// 	// If the condition is already a boolean from a comparison, we'll use it directly
+// 	var condBool value.Value
+// 	if condValue.Type().Equal(types.I1) {
+// 		condBool = condValue
+// 	} else {
+// 		// Otherwise, compare with zero
+// 		zero := constant.NewInt(types.I64, 0)
+// 		condBool = c.block.NewICmp(enum.IPredNE, condValue, zero)
+// 	}
+//
+// 	// Create the branch instruction
+// 	if stmt.Alternative != nil {
+// 		c.block.NewCondBr(condBool, thenBlock, elseBlock)
+// 	} else {
+// 		c.block.NewCondBr(condBool, thenBlock, mergeBlock)
+// 	}
+//
+// 	// Compile the consequence block
+// 	c.block = thenBlock
+// 	err = c.compileStatement(stmt.Consequence)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	// Add a branch to the merge block if the consequence doesn't end with a return
+// 	if thenBlock.Term == nil {
+// 		thenBlock.NewBr(mergeBlock)
+// 	}
+//
+// 	// Compile the alternative block if it exists
+// 	if stmt.Alternative != nil {
+// 		c.block = elseBlock
+// 		err = c.compileStatement(stmt.Alternative)
+// 		if err != nil {
+// 			return err
+// 		}
+//
+// 		// Add a branch to the merge block if the alternative doesn't end with a return
+// 		if elseBlock.Term == nil {
+// 			elseBlock.NewBr(mergeBlock)
+// 		}
+// 	}
+//
+// 	// Continue compilation in the merge block
+// 	c.block = mergeBlock
+//
+// 	return nil
+// } // Statements
+//
+// func (ls *LetStatement) statementNode()       {}
+// func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
+// func (ls *LetStatement) String() string {
+// 	var out strings.Builder
+// 	out.WriteString(ls.TokenLiteral() + " ")
+// 	out.WriteString(ls.Name.String())
+// 	out.WriteString(" = ")
+// 	if ls.Value != nil {
+// 		out.WriteString(ls.Value.String())
+// 	}
+// 	out.WriteString(";")
+// 	return out.String()
+// }
+//
+// func (rs *ReturnStatement) statementNode()       {}
+// func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
+// func (rs *ReturnStatement) String() string {
+// 	var out strings.Builder
+// 	out.WriteString(rs.TokenLiteral() + " ")
+// 	if rs.ReturnValue != nil {
+// 		out.WriteString(rs.ReturnValue.String())
+// 	}
+// 	out.WriteString(";")
+// 	return out.String()
+// }
+//
+// func (es *ExpressionStatement) statementNode()       {}
+// func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
+// func (es *ExpressionStatement) String() string {
+// 	if es.Expression != nil {
+// 		return es.Expression.String() + ";"
+// 	}
+// 	return ""
+// }
+//
+// func (bs *BlockStatement) statementNode()       {}
+// func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Literal }
+// func (bs *BlockStatement) String() string {
+// 	var out strings.Builder
+// 	for _, s := range bs.Statements {
+// 		out.WriteString(s.String())
+// 	}
+// 	return out.String()
+// }
+//
+// type IfStatement struct {
+// 	Token       Token // the 'if' token
+// 	Condition   Expression
+// 	Consequence *BlockStatement
+// 	Alternative *BlockStatement
+// }
+//
+// // Add these methods to make IfStatement and WhileStatement implement Expression
+//
+// func (is *IfStatement) expressionNode()      {}
+// func (ws *WhileStatement) expressionNode()   {}
+// func (is *IfStatement) statementNode()       {}
+// func (is *IfStatement) TokenLiteral() string { return is.Token.Literal }
+// func (is *IfStatement) String() string {
+// 	var out strings.Builder
+// 	out.WriteString("if")
+// 	out.WriteString("(")
+// 	out.WriteString(is.Condition.String())
+// 	out.WriteString(") ")
+// 	out.WriteString(is.Consequence.String())
+//
+// 	if is.Alternative != nil {
+// 		out.WriteString(" else ")
+// 		out.WriteString(is.Alternative.String())
+// 	}
+//
+// 	return out.String()
+// } // Enhanced compiler implementation in Go using LLVM
+//
+// // NextToken returns the next token
+// func (l *Lexer) NextToken() Token {
+// 	var tok Token
+//
+// 	l.skipWhitespace()
+//
+// 	switch l.ch {
+// 	case '=':
+// 		if l.peekChar() == '=' {
+// 			l.readChar()
+// 			tok = Token{Type: EQUAL, Literal: "=="}
+// 		} else {
+// 			tok = Token{Type: ASSIGN, Literal: "="}
+// 		}
+// 	case '+':
+// 		tok = Token{Type: PLUS, Literal: "+"}
+// 	case '-':
+// 		tok = Token{Type: MINUS, Literal: "-"}
+// 	case '*':
+// 		tok = Token{Type: MULTIPLY, Literal: "*"}
+// 	case '/':
+// 		tok = Token{Type: DIVIDE, Literal: "/"}
+// 	case '%':
+// 		tok = Token{Type: MODULO, Literal: "%"}
+// 	case '<':
+// 		if l.peekChar() == '=' {
+// 			l.readChar()
+// 			tok = Token{Type: LESSEQUAL, Literal: "<="}
+// 		} else {
+// 			tok = Token{Type: LESS, Literal: "<"}
+// 		}
+// 	case '>':
+// 		if l.peekChar() == '=' {
+// 			l.readChar()
+// 			tok = Token{Type: GREATEREQUAL, Literal: ">="}
+// 		} else {
+// 			tok = Token{Type: GREATER, Literal: ">"}
+// 		}
+// 	case '!':
+// 		if l.peekChar() == '=' {
+// 			l.readChar()
+// 			tok = Token{Type: NOTEQUAL, Literal: "!="}
+// 		} else {
+// 			// Handle unary not if needed
+// 		}
+// 	case '(':
+// 		tok = Token{Type: LPAREN, Literal: "("}
+// 	case ')':
+// 		tok = Token{Type: RPAREN, Literal: ")"}
+// 	case '{':
+// 		tok = Token{Type: LBRACE, Literal: "{"}
+// 	case '}':
+// 		tok = Token{Type: RBRACE, Literal: "}"}
+// 	case ',':
+// 		tok = Token{Type: COMMA, Literal: ","}
+// 	case ';':
+// 		tok = Token{Type: SEMICOLON, Literal: ";"}
+// 	case '"':
+// 		tok = Token{Type: STRING, Literal: l.readString()}
+// 	case 0:
+// 		tok = Token{Type: EOF, Literal: ""}
+// 	default:
+// 		if isLetter(l.ch) {
+// 			tok.Literal = l.readIdentifier()
+// 			tok.Type = LookupIdentifier(tok.Literal)
+// 			if tok.Literal == "else" {
+// 				tok.Type = ELSE
+// 			} else {
+// 				tok.Type = LookupIdentifier(tok.Literal)
+// 			}
+//
+// 			return tok
+// 		} else if isDigit(l.ch) {
+// 			tok.Type = NUMBER
+// 			tok.Literal = l.readNumber()
+// 			return tok
+// 		} else {
+// 			tok = Token{Type: EOF, Literal: string(l.ch)}
+// 		}
+// 	}
+//
+// 	l.readChar()
+// 	return tok
+// }
+//
+// // AST Node types
+// type Node interface {
+// 	TokenLiteral() string
+// 	String() string
+// }
+//
+// type Expression interface {
+// 	Node
+// 	expressionNode()
+// }
+//
+// type Statement interface {
+// 	Node
+// 	statementNode()
+// }
+//
+// // Program represents the root node of our AST
+// type Program struct {
+// 	Statements []Statement
+// }
+//
+// func (p *Program) TokenLiteral() string {
+// 	if len(p.Statements) > 0 {
+// 		return p.Statements[0].TokenLiteral()
+// 	}
+// 	return ""
+// }
+//
+// func (p *Program) String() string {
+// 	var out strings.Builder
+// 	for _, s := range p.Statements {
+// 		out.WriteString(s.String())
+// 	}
+// 	return out.String()
+// }
+//
+// // Expressions
+// type IntegerLiteral struct {
+// 	Token Token
+// 	Value int64
+// }
+//
+// func (il *IntegerLiteral) expressionNode()      {}
+// func (il *IntegerLiteral) TokenLiteral() string { return il.Token.Literal }
+// func (il *IntegerLiteral) String() string       { return il.Token.Literal }
+//
+// type StringLiteral struct {
+// 	Token Token
+// 	Value string
+// }
+//
+// func (sl *StringLiteral) expressionNode()      {}
+// func (sl *StringLiteral) TokenLiteral() string { return sl.Token.Literal }
+// func (sl *StringLiteral) String() string       { return `"` + sl.Token.Literal + `"` }
+//
+// type Identifier struct {
+// 	Token Token
+// 	Value string
+// }
+//
+// func (i *Identifier) expressionNode()      {}
+// func (i *Identifier) TokenLiteral() string { return i.Token.Literal }
+// func (i *Identifier) String() string       { return i.Value }
+//
+// type PrefixExpression struct {
+// 	Token    Token
+// 	Operator string
+// 	Right    Expression
+// }
+//
+// func (pe *PrefixExpression) expressionNode()      {}
+// func (pe *PrefixExpression) TokenLiteral() string { return pe.Token.Literal }
+// func (pe *PrefixExpression) String() string {
+// 	return "(" + pe.Operator + pe.Right.String() + ")"
+// }
+//
+// type InfixExpression struct {
+// 	Token    Token
+// 	Left     Expression
+// 	Operator string
+// 	Right    Expression
+// }
+//
+// func (ie *InfixExpression) expressionNode()      {}
+// func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
+// func (ie *InfixExpression) String() string {
+// 	return "(" + ie.Left.String() + " " + ie.Operator + " " + ie.Right.String() + ")"
+// }
+//
+// type CallExpression struct {
+// 	Token     Token
+// 	Function  Expression // Identifier or FunctionLiteral
+// 	Arguments []Expression
+// }
+//
+// func (ce *CallExpression) expressionNode()      {}
+// func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
+// func (ce *CallExpression) String() string {
+// 	var out strings.Builder
+// 	args := []string{}
+// 	for _, a := range ce.Arguments {
+// 		args = append(args, a.String())
+// 	}
+// 	out.WriteString(ce.Function.String())
+// 	out.WriteString("(")
+// 	out.WriteString(strings.Join(args, ", "))
+// 	out.WriteString(")")
+// 	return out.String()
+// }
+//
+// // Statements
+// type LetStatement struct {
+// 	Token Token // 'var' token
+// 	Name  *Identifier
+// 	Value Expression
+// }
+//
+// type ReturnStatement struct {
+// 	Token       Token // 'return' token
+// 	ReturnValue Expression
+// }
+//
+// type ExpressionStatement struct {
+// 	Token      Token // the first token of the expression
+// 	Expression Expression
+// }
+//
+// type BlockStatement struct {
+// 	Token      Token // the { token
+// 	Statements []Statement
+// }
+//
+// type FunctionLiteral struct {
+// 	Token      Token // The 'fn' token
+// 	Parameters []*Identifier
+// 	Body       *BlockStatement
+// 	Name       string // Optional function name
+// }
+//
+// func (fl *FunctionLiteral) expressionNode()      {}
+// func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Literal }
+// func (fl *FunctionLiteral) String() string {
+// 	var out strings.Builder
+// 	params := []string{}
+// 	for _, p := range fl.Parameters {
+// 		params = append(params, p.String())
+// 	}
+// 	out.WriteString(fl.TokenLiteral())
+// 	if fl.Name != "" {
+// 		out.WriteString(" " + fl.Name)
+// 	}
+// 	out.WriteString("(")
+// 	out.WriteString(strings.Join(params, ", "))
+// 	out.WriteString(") {")
+// 	out.WriteString(fl.Body.String())
+// 	out.WriteString("}")
+// 	return out.String()
+// }
+//
+// type PrintStatement struct {
+// 	Token Token // 'print' token
+// 	Value Expression
+// }
+//
+// func (ps *PrintStatement) statementNode()       {}
+// func (ps *PrintStatement) TokenLiteral() string { return ps.Token.Literal }
+// func (ps *PrintStatement) String() string {
+// 	var out strings.Builder
+// 	out.WriteString(ps.TokenLiteral() + " ")
+// 	if ps.Value != nil {
+// 		out.WriteString(ps.Value.String())
+// 	}
+// 	out.WriteString(";")
+// 	return out.String()
+// }
+//
+// // Parser precedences
+// const (
+// 	_ int = iota
+// 	LOWEST
+// 	EQUALS      // ==
+// 	LESSGREATER // > or <
+// 	SUM         // +
+// 	PRODUCT     // *
+// 	PREFIX      // -X or !X
+// 	CALL        // myFunction(X)
+// )
+//
+// var precedences = map[TokenType]int{
+// 	EQUAL:        EQUALS,
+// 	NOTEQUAL:     EQUALS,
+// 	LESS:         LESSGREATER,
+// 	GREATER:      LESSGREATER,
+// 	LESSEQUAL:    LESSGREATER,
+// 	GREATEREQUAL: LESSGREATER,
+// 	PLUS:         SUM,
+// 	MINUS:        SUM,
+// 	MULTIPLY:     PRODUCT,
+// 	DIVIDE:       PRODUCT,
+// 	MODULO:       PRODUCT,
+// 	LPAREN:       CALL,
+// 	ASSIGN:       LOWEST, // Add assignment with lowest precedence
+// }
+//
+// // Parser that converts tokens to an AST
+// type Parser struct {
+// 	l         *Lexer
+// 	curToken  Token
+// 	peekToken Token
+// 	errors    []string
+//
+// 	prefixParseFns map[TokenType]prefixParseFn
+// 	infixParseFns  map[TokenType]infixParseFn
+// }
+//
+// type prefixParseFn func() Expression
+// type infixParseFn func(Expression) Expression
+//
+// // NewParser creates a new parser
+// func NewParser(l *Lexer) *Parser {
+// 	p := &Parser{
+// 		l:      l,
+// 		errors: []string{},
+// 	}
+//
+// 	// Register prefix parse functions
+// 	p.prefixParseFns = make(map[TokenType]prefixParseFn)
+// 	p.registerPrefix(IDENTIFIER, p.parseIdentifierOrAssignment)
+// 	p.registerPrefix(NUMBER, p.parseIntegerLiteral)
+// 	p.registerPrefix(STRING, p.parseStringLiteral)
+// 	p.registerPrefix(MINUS, p.parsePrefixExpression)
+// 	p.registerPrefix(LPAREN, p.parseGroupedExpression)
+// 	p.registerPrefix(FUNCTION, p.parseFunctionLiteral)
+// 	p.registerPrefix(IF, p.parseIfStatement)
+// 	p.registerPrefix(WHILE, p.parseWhileStatement)
+//
+// 	// Register infix parse functions
+// 	p.infixParseFns = make(map[TokenType]infixParseFn)
+// 	p.registerInfix(PLUS, p.parseInfixExpression)
+// 	p.registerInfix(MINUS, p.parseInfixExpression)
+// 	p.registerInfix(MULTIPLY, p.parseInfixExpression)
+// 	p.registerInfix(DIVIDE, p.parseInfixExpression)
+// 	p.registerInfix(MODULO, p.parseInfixExpression)
+// 	p.registerInfix(EQUAL, p.parseInfixExpression)
+// 	p.registerInfix(NOTEQUAL, p.parseInfixExpression)
+// 	p.registerInfix(LESS, p.parseInfixExpression)
+// 	p.registerInfix(GREATER, p.parseInfixExpression)
+// 	p.registerInfix(LESSEQUAL, p.parseInfixExpression)
+// 	p.registerInfix(GREATEREQUAL, p.parseInfixExpression)
+// 	p.registerInfix(LPAREN, p.parseCallExpression)
+// 	p.registerInfix(ASSIGN, p.parseAssignmentExpression)
+//
+// 	// Read two tokens, so curToken and peekToken are both set
+// 	p.nextToken()
+// 	p.nextToken()
+// 	return p
+// }
+//
+// func (p *Parser) nextToken() {
+// 	p.curToken = p.peekToken
+// 	p.peekToken = p.l.NextToken()
+// }
+//
+// func (p *Parser) registerPrefix(tokenType TokenType, fn prefixParseFn) {
+// 	p.prefixParseFns[tokenType] = fn
+// }
+//
+// func (p *Parser) registerInfix(tokenType TokenType, fn infixParseFn) {
+// 	p.infixParseFns[tokenType] = fn
+// }
+//
+// func (p *Parser) Errors() []string {
+// 	return p.errors
+// }
+//
+// func (p *Parser) peekError(t TokenType) {
+// 	msg := fmt.Sprintf("expected next token to be %d, got %d instead", t, p.peekToken.Type)
+// 	p.errors = append(p.errors, msg)
+// }
+//
+// func (p *Parser) curTokenIs(t TokenType) bool {
+// 	return p.curToken.Type == t
+// }
+//
+// func (p *Parser) peekTokenIs(t TokenType) bool {
+// 	return p.peekToken.Type == t
+// }
+//
+// func (p *Parser) expectPeek(t TokenType) bool {
+// 	if p.peekTokenIs(t) {
+// 		p.nextToken()
+// 		return true
+// 	} else {
+// 		p.peekError(t)
+// 		return false
+// 	}
+// }
+//
+// func (p *Parser) peekPrecedence() int {
+// 	if p, ok := precedences[p.peekToken.Type]; ok {
+// 		return p
+// 	}
+// 	return LOWEST
+// }
+//
+// func (p *Parser) curPrecedence() int {
+// 	if p, ok := precedences[p.curToken.Type]; ok {
+// 		return p
+// 	}
+// 	return LOWEST
+// }
+//
+// // Parse methods for expressions
+// func (p *Parser) parseIdentifier() Expression {
+// 	return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+// }
+//
+// func (p *Parser) parseIntegerLiteral() Expression {
+// 	lit := &IntegerLiteral{Token: p.curToken}
+// 	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+// 	if err != nil {
+// 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
+// 		p.errors = append(p.errors, msg)
+// 		return nil
+// 	}
+// 	lit.Value = value
+// 	return lit
+// }
+//
+// func (p *Parser) parseIdentifierOrAssignment() Expression {
+// 	// Create an identifier first
+// 	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+//
+// 	// Check if the next token is an assignment
+// 	if p.peekTokenIs(ASSIGN) {
+// 		// This is an assignment, so prepare for assignment parsing
+// 		expr := &AssignmentExpression{
+// 			Token: p.peekToken,
+// 			Name:  ident,
+// 		}
+//
+// 		// Move past the identifier and the equals sign
+// 		p.nextToken() // Move to '='
+// 		p.nextToken() // Move past '=' to the value
+//
+// 		// Parse the right side of the assignment
+// 		expr.Value = p.parseExpression(LOWEST)
+//
+// 		return expr
+// 	}
+//
+// 	// If not an assignment, just return the identifier
+// 	return ident
+// }
+//
+// type AssignmentExpression struct {
+// 	Token Token
+// 	Name  *Identifier
+// 	Value Expression
+// }
+//
+// func (ae *AssignmentExpression) expressionNode()      {}
+// func (ae *AssignmentExpression) TokenLiteral() string { return ae.Token.Literal }
+// func (ae *AssignmentExpression) String() string {
+// 	return ae.Name.String() + " = " + ae.Value.String()
+// }
+//
+// func (p *Parser) parseAssignmentExpression(left Expression) Expression {
+// 	// Ensure the left side is an identifier
+// 	ident, ok := left.(*Identifier)
+// 	if !ok {
+// 		p.errors = append(p.errors, "invalid assignment target")
+// 		return nil
+// 	}
+//
+// 	// Create an assignment expression
+// 	expr := &AssignmentExpression{
+// 		Token: p.curToken,
+// 		Name:  ident,
+// 	}
+//
+// 	// Parse the right side of the assignment
+// 	p.nextToken()
+// 	expr.Value = p.parseExpression(LOWEST)
+//
+// 	return expr
+// }
+//
+// func (p *Parser) parseStringLiteral() Expression {
+// 	return &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+// }
+//
+// func (p *Parser) parsePrefixExpression() Expression {
+// 	expression := &PrefixExpression{
+// 		Token:    p.curToken,
+// 		Operator: p.curToken.Literal,
+// 	}
+// 	p.nextToken()
+// 	expression.Right = p.parseExpression(PREFIX)
+// 	return expression
+// }
+//
+// func (p *Parser) parseInfixExpression(left Expression) Expression {
+// 	expression := &InfixExpression{
+// 		Token:    p.curToken,
+// 		Operator: p.curToken.Literal,
+// 		Left:     left,
+// 	}
+// 	precedence := p.curPrecedence()
+// 	p.nextToken()
+// 	expression.Right = p.parseExpression(precedence)
+// 	return expression
+// }
+//
+// func (p *Parser) parseGroupedExpression() Expression {
+// 	p.nextToken()
+// 	exp := p.parseExpression(LOWEST)
+// 	if !p.expectPeek(RPAREN) {
+// 		return nil
+// 	}
+// 	return exp
+// }
+//
+// func (p *Parser) parseFunctionLiteral() Expression {
+// 	lit := &FunctionLiteral{Token: p.curToken}
+//
+// 	// Check if the function has a name
+// 	if p.peekTokenIs(IDENTIFIER) {
+// 		p.nextToken()
+// 		lit.Name = p.curToken.Literal
+// 	}
+//
+// 	if !p.expectPeek(LPAREN) {
+// 		return nil
+// 	}
+//
+// 	lit.Parameters = p.parseFunctionParameters()
+//
+// 	if !p.expectPeek(LBRACE) {
+// 		return nil
+// 	}
+//
+// 	lit.Body = p.parseBlockStatement()
+//
+// 	return lit
+// }
+//
+// func (p *Parser) parseFunctionParameters() []*Identifier {
+// 	identifiers := []*Identifier{}
+//
+// 	if p.peekTokenIs(RPAREN) {
+// 		p.nextToken()
+// 		return identifiers
+// 	}
+//
+// 	p.nextToken()
+//
+// 	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+// 	identifiers = append(identifiers, ident)
+//
+// 	for p.peekTokenIs(COMMA) {
+// 		p.nextToken()
+// 		p.nextToken()
+// 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+// 		identifiers = append(identifiers, ident)
+// 	}
+//
+// 	if !p.expectPeek(RPAREN) {
+// 		return nil
+// 	}
+//
+// 	return identifiers
+// }
+//
+// func (p *Parser) parseCallExpression(function Expression) Expression {
+// 	exp := &CallExpression{Token: p.curToken, Function: function}
+// 	exp.Arguments = p.parseExpressionList(RPAREN)
+// 	return exp
+// }
+//
+// func (p *Parser) parseExpressionList(end TokenType) []Expression {
+// 	list := []Expression{}
+//
+// 	if p.peekTokenIs(end) {
+// 		p.nextToken()
+// 		return list
+// 	}
+//
+// 	p.nextToken()
+// 	list = append(list, p.parseExpression(LOWEST))
+//
+// 	for p.peekTokenIs(COMMA) {
+// 		p.nextToken()
+// 		p.nextToken()
+// 		list = append(list, p.parseExpression(LOWEST))
+// 	}
+//
+// 	if !p.expectPeek(end) {
+// 		return nil
+// 	}
+//
+// 	return list
+// }
+//
+// func (p *Parser) parseExpression(precedence int) Expression {
+// 	prefix := p.prefixParseFns[p.curToken.Type]
+// 	if prefix == nil {
+// 		msg := fmt.Sprintf("no prefix parse function for %s found", p.curToken.Literal)
+// 		p.errors = append(p.errors, msg)
+// 		return nil
+// 	}
+//
+// 	leftExp := prefix()
+// 	if leftExp == nil {
+// 		return nil
+// 	}
+//
+// 	// Special handling for assignment to ensure it has the lowest precedence
+// 	for !p.peekTokenIs(SEMICOLON) && precedence < p.peekPrecedence() {
+// 		// If we're dealing with an assignment, ensure it's handled last
+// 		if p.peekToken.Type == ASSIGN {
+// 			if precedence > LOWEST {
+// 				return leftExp
+// 			}
+// 		}
+//
+// 		infix := p.infixParseFns[p.peekToken.Type]
+// 		if infix == nil {
+// 			return leftExp
+// 		}
+//
+// 		p.nextToken()
+// 		leftExp = infix(leftExp)
+// 		if leftExp == nil {
+// 			return nil
+// 		}
+// 	}
+//
+// 	return leftExp
+// }
+//
+// func (p *Parser) parseIfStatement() Expression {
+// 	stmt := &IfStatement{Token: p.curToken}
+// 	if !p.expectPeek(LPAREN) {
+// 		return nil
+// 	}
+// 	p.nextToken()
+// 	stmt.Condition = p.parseExpression(LOWEST)
+// 	if !p.expectPeek(RPAREN) {
+// 		return nil
+// 	}
+//
+// 	if !p.expectPeek(LBRACE) {
+// 		return nil
+// 	}
+// 	stmt.Consequence = p.parseBlockStatement()
+//
+// 	// Optional else block
+// 	if p.peekTokenIs(ELSE) {
+// 		p.nextToken()
+// 		if !p.expectPeek(LBRACE) {
+// 			return nil
+// 		}
+//
+// 		stmt.Alternative = p.parseBlockStatement()
+// 	}
+//
+// 	return stmt
+// }
+//
+// // Parse methods for statements
+// func (p *Parser) parseLetStatement() *LetStatement {
+// 	stmt := &LetStatement{Token: p.curToken}
+//
+// 	if !p.expectPeek(IDENTIFIER) {
+// 		return nil
+// 	}
+//
+// 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+//
+// 	if !p.expectPeek(ASSIGN) {
+// 		return nil
+// 	}
+//
+// 	p.nextToken()
+// 	stmt.Value = p.parseExpression(LOWEST)
+//
+// 	if p.peekTokenIs(SEMICOLON) {
+// 		p.nextToken()
+// 	}
+//
+// 	return stmt
+// }
+//
+// func (p *Parser) parseStatement() Statement {
+// 	switch p.curToken.Type {
+// 	case VAR:
+// 		return p.parseLetStatement()
+// 	case RETURN:
+// 		return p.parseReturnStatement()
+// 	case PRINT:
+// 		return p.parsePrintStatement()
+// 	case IF:
+// 		ifStmt := p.parseIfStatement()
+// 		if ifStmt == nil {
+// 			return nil
+// 		}
+// 		return ifStmt.(*IfStatement)
+// 	case WHILE:
+// 		whileStmt := p.parseWhileStatement()
+// 		if whileStmt == nil {
+// 			return nil
+// 		}
+// 		return whileStmt.(*WhileStatement)
+// 	case ELSE:
+// 		// Unexpected else, add an error
+// 		p.errors = append(p.errors, "unexpected else statement")
+// 		return nil
+// 	default:
+// 		return p.parseExpressionStatement()
+// 	}
+// }
+//
+// func (p *Parser) parseReturnStatement() *ReturnStatement {
+// 	stmt := &ReturnStatement{Token: p.curToken}
+//
+// 	p.nextToken()
+//
+// 	stmt.ReturnValue = p.parseExpression(LOWEST)
+//
+// 	if p.peekTokenIs(SEMICOLON) {
+// 		p.nextToken()
+// 	}
+//
+// 	return stmt
+// }
+//
+// func (p *Parser) parsePrintStatement() *PrintStatement {
+// 	stmt := &PrintStatement{Token: p.curToken}
+//
+// 	p.nextToken()
+//
+// 	stmt.Value = p.parseExpression(LOWEST)
+//
+// 	if p.peekTokenIs(SEMICOLON) {
+// 		p.nextToken()
+// 	}
+//
+// 	return stmt
+// }
+//
+// func (p *Parser) parseExpressionStatement() *ExpressionStatement {
+// 	stmt := &ExpressionStatement{Token: p.curToken}
+// 	stmt.Expression = p.parseExpression(LOWEST)
+//
+// 	if p.peekTokenIs(SEMICOLON) {
+// 		p.nextToken()
+// 	}
+//
+// 	return stmt
+// }
+//
+// func (p *Parser) parseBlockStatement() *BlockStatement {
+// 	block := &BlockStatement{Token: p.curToken}
+// 	block.Statements = []Statement{}
+//
+// 	p.nextToken()
+//
+// 	for !p.curTokenIs(RBRACE) && !p.curTokenIs(EOF) {
+// 		stmt := p.parseStatement()
+// 		if stmt != nil {
+// 			block.Statements = append(block.Statements, stmt)
+// 		}
+// 		p.nextToken()
+// 	}
+//
+// 	return block
+// }
+//
+// // Main parsing method
+// func (p *Parser) ParseProgram() *Program {
+// 	program := &Program{}
+// 	program.Statements = []Statement{}
+//
+// 	for !p.curTokenIs(EOF) {
+// 		stmt := p.parseStatement()
+// 		if stmt != nil {
+// 			program.Statements = append(program.Statements, stmt)
+// 		}
+// 		p.nextToken()
+// 	}
+//
+// 	return program
+// }
+//
+// // Symbol table for managing variables and functions
+// type SymbolTable struct {
+// 	symbols map[string]Symbol
+// 	outer   *SymbolTable
+// }
+//
+// type SymbolScope string
+//
+// const (
+// 	GlobalScope  SymbolScope = "GLOBAL"
+// 	LocalScope   SymbolScope = "LOCAL"
+// 	BuiltinScope SymbolScope = "BUILTIN"
+// )
+//
+// type Symbol struct {
+// 	Name      string
+// 	Scope     SymbolScope
+// 	Value     value.Value
+// 	IsBuiltin bool
+// }
+//
+// func NewSymbolTable() *SymbolTable {
+// 	return &SymbolTable{
+// 		symbols: make(map[string]Symbol),
+// 		outer:   nil,
+// 	}
+// }
+//
+// func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
+// 	s := NewSymbolTable()
+// 	s.outer = outer
+// 	return s
+// }
+//
+// func (s *SymbolTable) Define(name string, val value.Value, scope SymbolScope) Symbol {
+// 	symbol := Symbol{Name: name, Value: val, Scope: scope}
+// 	s.symbols[name] = symbol
+// 	return symbol
+// }
+//
+// func (s *SymbolTable) DefineBuiltin(name string, val value.Value) Symbol {
+// 	symbol := Symbol{Name: name, Value: val, Scope: BuiltinScope, IsBuiltin: true}
+// 	s.symbols[name] = symbol
+// 	return symbol
+// }
+//
+// func (s *SymbolTable) Resolve(name string) (Symbol, bool) {
+// 	obj, ok := s.symbols[name]
+// 	if !ok && s.outer != nil {
+// 		obj, ok = s.outer.Resolve(name)
+// 		return obj, ok
+// 	}
+// 	return obj, ok
+// }
+//
+// // Compiler generates LLVM IR from an AST
+// type Compiler struct {
+// 	module *ir.Module
+// 	block  *ir.Block
+// 	symtab *SymbolTable
+// 	errors []string
+//
+// 	// Keep track of current function being compiled
+// 	currentFunction *ir.Func
+//
+// 	// Map to track string constants
+// 	strings map[string]*ir.Global
+// }
+//
+// // NewCompiler creates a new compiler instance
+// func NewCompiler() *Compiler {
+// 	module := ir.NewModule()
+// 	symtab := NewSymbolTable()
+//
+// 	compiler := &Compiler{
+// 		module:  module,
+// 		symtab:  symtab,
+// 		errors:  []string{},
+// 		strings: make(map[string]*ir.Global),
+// 	}
+//
+// 	// Add external declaration for printf
+// 	printf := module.NewFunc("printf", types.I32,
+// 		ir.NewParam("format", types.NewPointer(types.I8)))
+// 	printf.Sig.Variadic = true
+//
+// 	// Define printf as a builtin function
+// 	symtab.DefineBuiltin("printf", printf)
+//
+// 	return compiler
+// }
+//
+// // Errors returns compilation errors
+// func (c *Compiler) Errors() []string {
+// 	return c.errors
+// }
+//
+// // addError adds an error message
+// func (c *Compiler) addError(format string, args ...interface{}) {
+// 	c.errors = append(c.errors, fmt.Sprintf(format, args...))
+// }
+//
+// // getStringConstant gets or creates a global string constant
+// func (c *Compiler) getStringConstant(value string) *ir.Global {
+// 	if global, ok := c.strings[value]; ok {
+// 		return global
+// 	}
+//
+// 	// Create a new global string constant with null terminator
+// 	str := constant.NewCharArrayFromString(value + "\x00")
+// 	global := c.module.NewGlobalDef("str."+strconv.Itoa(len(c.strings)), str)
+// 	c.strings[value] = global
+// 	return global
+// }
+//
+// func (c *Compiler) Compile(program *Program) error {
+// 	// Validate input
+// 	if program == nil {
+// 		return fmt.Errorf("cannot compile nil program")
+// 	}
+//
+// 	// Add a main function
+// 	mainFunc := c.module.NewFunc("main", types.I32)
+//
+// 	// Ensure the main function has at least one block
+// 	mainBlock := mainFunc.NewBlock("entry")
+// 	c.block = mainBlock
+// 	c.currentFunction = mainFunc
+//
+// 	// Define main as a global scope function
+// 	c.symtab.Define("main", mainFunc, GlobalScope)
+//
+// 	// If the program has no statements, add a default return 0
+// 	if len(program.Statements) == 0 {
+// 		mainBlock.NewRet(constant.NewInt(types.I32, 0))
+// 		return nil
+// 	}
+//
+// 	// Compile all statements with additional error tracking
+// 	for i, stmt := range program.Statements {
+// 		if stmt == nil {
+// 			c.addError(fmt.Sprintf("nil statement at index %d", i))
+// 			continue
+// 		}
+//
+// 		err := c.compileStatement(stmt)
+// 		if err != nil {
+// 			c.addError(fmt.Sprintf("error compiling statement at index %d: %v", i, err))
+// 			return err
+// 		}
+// 	}
+//
+// 	// Add return 0 if not already added
+// 	if len(mainBlock.Insts) == 0 || mainBlock.Term == nil {
+// 		mainBlock.NewRet(constant.NewInt(types.I32, 0))
+// 	}
+//
+// 	return nil
+// }
+//
+// func (c *Compiler) compileIdentifier(ident *Identifier) (value.Value, error) {
+// 	symbol, ok := c.symtab.Resolve(ident.Value)
+// 	if !ok {
+// 		return nil, fmt.Errorf("variable %s not defined", ident.Value)
+// 	}
+//
+// 	// Handle different kinds of values consistently
+// 	if funcVal, ok := symbol.Value.(*ir.Func); ok {
+// 		// Functions are returned directly
+// 		return funcVal, nil
+// 	} else if globalVal, ok := symbol.Value.(*ir.Global); ok {
+// 		// Globals are always loaded
+// 		return c.block.NewLoad(types.I64, globalVal), nil
+// 	} else if allocaVal, ok := symbol.Value.(*ir.InstAlloca); ok {
+// 		// Local variables are always loaded
+// 		return c.block.NewLoad(types.I64, allocaVal), nil
+// 	} else if paramVal, ok := symbol.Value.(*ir.Param); ok {
+// 		// Function parameters are used directly
+// 		return paramVal, nil
+// 	}
+//
+// 	// For any other value type, return as is
+// 	return symbol.Value, nil
+// }
+//
+// func (c *Compiler) compileLetStatement(stmt *LetStatement) error {
+// 	// Check if the value is nil
+// 	if stmt.Value == nil {
+// 		return fmt.Errorf("let statement requires an initial value")
+// 	}
+//
+// 	// If we're at global scope or main function
+// 	if c.currentFunction == nil || c.currentFunction.Name() == "main" {
+// 		// Ensure all variables are created with allocas in main function entry block
+// 		entryBlock := c.currentFunction.Blocks[0]
+// 		oldBlock := c.block
+// 		c.block = entryBlock
+//
+// 		// Create the alloca first before evaluating any expressions
+// 		alloca := c.block.NewAlloca(types.I64)
+//
+// 		// Add the variable to the symbol table immediately so it can be referenced
+// 		// in expressions like "var z = x + y"
+// 		c.symtab.Define(stmt.Name.Value, alloca, LocalScope)
+//
+// 		// Now compile the value expression AFTER the variable is defined
+// 		val, err := c.compileExpression(stmt.Value)
+// 		if err != nil {
+// 			c.block = oldBlock
+// 			return err
+// 		}
+//
+// 		// Store the computed value
+// 		c.block.NewStore(val, alloca)
+//
+// 		// Restore the previous block
+// 		c.block = oldBlock
+// 		return nil
+// 	} else {
+// 		// For local variables in other functions
+// 		alloca := c.block.NewAlloca(types.I64)
+// 		// Define the variable first
+// 		c.symtab.Define(stmt.Name.Value, alloca, LocalScope)
+//
+// 		// Compile expression after defining the variable
+// 		val, err := c.compileExpression(stmt.Value)
+// 		if err != nil {
+// 			return err
+// 		}
+//
+// 		// Store the result
+// 		c.block.NewStore(val, alloca)
+// 		return nil
+// 	}
+// }
+//
+// // func (c *Compiler) compileLetStatement(stmt *LetStatement) error {
+// // 	// Check if the value is nil
+// // 	if stmt.Value == nil {
+// // 		return fmt.Errorf("let statement requires an initial value")
+// // 	}
+// //
+// // 	if infix, ok := stmt.Value.(*InfixExpression); ok {
+// // 		if leftIdent, ok := infix.Left.(*Identifier); ok {
+// // 			if _, exists := c.symtab.Resolve(leftIdent.Value); !exists {
+// // 				return fmt.Errorf("variable %s not defined in expression for %s", leftIdent.Value, stmt.Name.Value)
+// // 			}
+// // 		}
+// //
+// // 		if rightIdent, ok := infix.Right.(*Identifier); ok {
+// // 			if _, exists := c.symtab.Resolve(rightIdent.Value); !exists {
+// // 				return fmt.Errorf("variable %s not defined in expression for %s", rightIdent.Value, stmt.Name.Value)
+// // 			}
+// // 		}
+// // 	}
+// //
+// // 	if c.currentFunction != nil && c.currentFunction.Name() == "main" {
+// // 		entryBlock := c.currentFunction.Blocks[0]
+// //
+// // 		// Save current block
+// // 		oldBlock := c.block
+// //
+// // 		// Switch to entry block temporarily
+// // 		c.block = entryBlock
+// //
+// // 		// Create the alloca
+// // 		alloca := c.block.NewAlloca(types.I64)
+// //
+// // 		// Compile the value expression
+// // 		val, err := c.compileExpression(stmt.Value)
+// // 		if err != nil {
+// // 			c.block = oldBlock // Restore block before returning
+// // 			return err
+// // 		}
+// //
+// // 		// Store the computed value
+// // 		c.block.NewStore(val, alloca)
+// //
+// // 		// Define the variable in the symbol table
+// // 		c.symtab.Define(stmt.Name.Value, alloca, LocalScope)
+// //
+// // 		// Restore the previous block
+// // 		c.block = oldBlock
+// // 		return nil
+// // 	}
+// //
+// // 	switch expr := stmt.Value.(type) {
+// // 	case *InfixExpression:
+// // 		// First, ensure left and right operands are compiled if they are identifiers
+// // 		if leftIdent, ok := expr.Left.(*Identifier); ok {
+// // 			if _, err := c.compileExpression(leftIdent); err != nil {
+// // 				return fmt.Errorf("error compiling left operand of %s: %v", stmt.Name.Value, err)
+// // 			}
+// // 		}
+// // 		if rightIdent, ok := expr.Right.(*Identifier); ok {
+// // 			if _, err := c.compileExpression(rightIdent); err != nil {
+// // 				return fmt.Errorf("error compiling right operand of %s: %v", stmt.Name.Value, err)
+// // 			}
+// // 		}
+// // 	}
+// //
+// // 	// Compile the value expression
+// // 	val, err := c.compileExpression(stmt.Value)
+// // 	if err != nil {
+// // 		return err
+// // 	}
+// //
+// // 	// If we're at global or main function scope
+// // 	if c.currentFunction == nil || c.currentFunction.Name() == "main" {
+// // 		// For global values, we need to use a global variable
+// // 		if intLit, ok := stmt.Value.(*IntegerLiteral); ok {
+// // 			// Use a global constant for integer literals
+// // 			global := c.module.NewGlobalDef(stmt.Name.Value, constant.NewInt(types.I64, intLit.Value))
+// // 			c.symtab.Define(stmt.Name.Value, global, GlobalScope)
+// // 			return nil
+// // 		} else {
+// // 			// Create an alloca at the start of main for local variables
+// // 			entryBlock := c.currentFunction.Blocks[0]
+// //
+// // 			// Ensure we're in the entry block
+// // 			oldBlock := c.block
+// // 			c.block = entryBlock
+// //
+// // 			// Create the alloca
+// // 			alloca := c.block.NewAlloca(types.I64)
+// //
+// // 			// Store the value
+// // 			c.block.NewStore(val, alloca)
+// //
+// // 			// Define the variable in the symbol table
+// // 			c.symtab.Define(stmt.Name.Value, alloca, LocalScope)
+// //
+// // 			// Restore the previous block
+// // 			c.block = oldBlock
+// // 			return nil
+// // 		}
+// // 	} else {
+// // 		// For local variables in other functions, create an alloca
+// // 		alloca := c.block.NewAlloca(types.I64)
+// // 		c.block.NewStore(val, alloca)
+// // 		c.symtab.Define(stmt.Name.Value, alloca, LocalScope)
+// // 		return nil
+// // 	}
+// // }
+//
+// // compileStatement compiles a statement
+// func (c *Compiler) compileStatement(stmt Statement) error {
+// 	// Validate input
+// 	if stmt == nil {
+// 		return fmt.Errorf("cannot compile nil statement")
+// 	}
+//
+// 	// Add error tracking for statement compilation
+// 	defer func() {
+// 		if r := recover(); r != nil {
+// 			c.addError(fmt.Sprintf("panic while compiling statement: %v", r))
+// 		}
+// 	}()
+//
+// 	switch s := stmt.(type) {
+// 	case *LetStatement:
+// 		return c.compileLetStatement(s)
+// 	case *ReturnStatement:
+// 		return c.compileReturnStatement(s)
+// 	case *ExpressionStatement:
+// 		if s.Expression == nil {
+// 			return fmt.Errorf("nil expression in expression statement")
+// 		}
+// 		_, err := c.compileExpression(s.Expression)
+// 		return err
+// 	case *PrintStatement:
+// 		return c.compilePrintStatement(s)
+// 	case *IfStatement:
+// 		return c.compileIfStatement(s)
+// 	case *WhileStatement:
+// 		return c.compileWhileStatement(s)
+// 	case *BlockStatement:
+// 		oldSymTable := c.symtab
+// 		c.symtab = NewEnclosedSymbolTable(c.symtab)
+//
+// 		for _, blockStmt := range s.Statements {
+// 			if blockStmt == nil {
+// 				c.addError("nil statement in block")
+// 				continue
+// 			}
+// 			err := c.compileStatement(blockStmt)
+// 			if err != nil {
+// 				return err
+// 			}
+// 		}
+//
+// 		c.symtab = oldSymTable
+// 		return nil
+// 	default:
+// 		return fmt.Errorf("unknown statement type: %T", stmt)
+// 	}
+// }
+//
+// // compileReturnStatement compiles a return statement
+// func (c *Compiler) compileReturnStatement(stmt *ReturnStatement) error {
+// 	if c.currentFunction == nil {
+// 		return fmt.Errorf("return statement outside of function")
+// 	}
+//
+// 	retVal, err := c.compileExpression(stmt.ReturnValue)
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	c.block.NewRet(retVal)
+// 	return nil
+// }
+//
+// // compilePrintStatement compiles a print statement
+// func (c *Compiler) compilePrintStatement(stmt *PrintStatement) error {
+// 	// Get the printf function
+// 	printfSym, ok := c.symtab.Resolve("printf")
+// 	if !ok || !printfSym.IsBuiltin {
+// 		return fmt.Errorf("printf function not found")
+// 	}
+//
+// 	printfFunc := printfSym.Value
+//
+// 	// Determine what to print based on expression type
+// 	switch expr := stmt.Value.(type) {
+// 	case *IntegerLiteral:
+// 		// For integers, use %d format string
+// 		formatStr := c.getStringConstant("%d\n")
+// 		formatPtr := c.block.NewGetElementPtr(types.I8, formatStr, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0))
+//
+// 		// Compile the value expression
+// 		val, err := c.compileExpression(expr)
+// 		if err != nil {
+// 			return err
+// 		}
+//
+// 		// Call printf
+// 		c.block.NewCall(printfFunc, formatPtr, val)
+//
+// 	case *StringLiteral:
+// 		// For strings, use %s format string
+// 		formatStr := c.getStringConstant("%s\n")
+// 		formatPtr := c.block.NewGetElementPtr(types.I8, formatStr, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0))
+//
+// 		// Get or create the string constant
+// 		strConst := c.getStringConstant(expr.Value)
+// 		strPtr := c.block.NewGetElementPtr(types.I8, strConst, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0))
+//
+// 		// Call printf
+// 		c.block.NewCall(printfFunc, formatPtr, strPtr)
+//
+// 	default:
+// 		// For other expressions, compile and print as integer
+// 		formatStr := c.getStringConstant("%d\n")
+// 		formatPtr := c.block.NewGetElementPtr(types.I8, formatStr, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0))
+//
+// 		val, err := c.compileExpression(stmt.Value)
+// 		if err != nil {
+// 			return err
+// 		}
+//
+// 		c.block.NewCall(printfFunc, formatPtr, val)
+// 	}
+//
+// 	return nil
+// }
+//
+// func (c *Compiler) compileExpression(expr Expression) (value.Value, error) {
+// 	// Validate input
+// 	if expr == nil {
+// 		return nil, fmt.Errorf("cannot compile nil expression")
+// 	}
+//
+// 	// Add error tracking for expression compilation
+// 	defer func() {
+// 		if r := recover(); r != nil {
+// 			c.addError(fmt.Sprintf("panic while compiling expression: %v", r))
+// 		}
+// 	}()
+//
+// 	switch e := expr.(type) {
+// 	case *IntegerLiteral:
+// 		return constant.NewInt(types.I64, e.Value), nil
+//
+// 	case *StringLiteral:
+// 		// Return a pointer to the first character of the string
+// 		strConst := c.getStringConstant(e.Value)
+// 		return c.block.NewGetElementPtr(types.I8, strConst, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0)), nil
+//
+// 	case *Identifier:
+// 		return c.compileIdentifier(e)
+// 		// if e == nil || e.Value == "" {
+// 		// 	return nil, fmt.Errorf("invalid identifier")
+// 		// }
+// 		// symbol, ok := c.symtab.Resolve(e.Value)
+// 		// if !ok {
+// 		// 	return nil, fmt.Errorf("variable %s not defined", e.Value)
+// 		// }
+// 		//
+// 		// // If it's a function, return it directly
+// 		// if funcVal, ok := symbol.Value.(*ir.Func); ok {
+// 		// 	return funcVal, nil
+// 		// }
+// 		//
+// 		// // Consistent handling of globals - ALWAYS load them
+// 		// if globalVal, ok := symbol.Value.(*ir.Global); ok {
+// 		// 	// For global values, we need to load them before use
+// 		// 	return c.block.NewLoad(types.I64, globalVal), nil
+// 		// }
+// 		//
+// 		// // For local variables, load the value from the alloca
+// 		// if allocaVal, ok := symbol.Value.(*ir.InstAlloca); ok {
+// 		// 	return c.block.NewLoad(types.I64, allocaVal), nil
+// 		// }
+// 		//
+// 		// return symbol.Value, nil
+//
+// 	case *PrefixExpression:
+// 		if e.Right == nil {
+// 			return nil, fmt.Errorf("nil right operand in prefix expression")
+// 		}
+// 		right, err := c.compileExpression(e.Right)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		switch e.Operator {
+// 		case "-":
+// 			return c.block.NewSub(constant.NewInt(types.I64, 0), right), nil
+// 		default:
+// 			return nil, fmt.Errorf("unknown prefix operator: %s", e.Operator)
+// 		}
+//
+// 	case *InfixExpression:
+// 		if e.Left == nil || e.Right == nil {
+// 			return nil, fmt.Errorf("nil operand in infix expression")
+// 		}
+//
+// 		// Special handling for identifier operands to ensure they're defined
+// 		var leftErr, rightErr error
+// 		var left, right value.Value
+//
+// 		// Attempt to compile left operand, with special handling for identifiers
+// 		if leftIdent, ok := e.Left.(*Identifier); ok {
+// 			// Check if the identifier exists before compiling
+// 			_, exists := c.symtab.Resolve(leftIdent.Value)
+// 			if !exists {
+// 				return nil, fmt.Errorf("variable %s not defined", leftIdent.Value)
+// 			}
+// 		}
+// 		left, leftErr = c.compileExpression(e.Left)
+//
+// 		// Attempt to compile right operand, with special handling for identifiers
+// 		if rightIdent, ok := e.Right.(*Identifier); ok {
+// 			// Check if the identifier exists before compiling
+// 			_, exists := c.symtab.Resolve(rightIdent.Value)
+// 			if !exists {
+// 				return nil, fmt.Errorf("variable %s not defined", rightIdent.Value)
+// 			}
+// 		}
+// 		right, rightErr = c.compileExpression(e.Right)
+//
+// 		// Check for any compilation errors
+// 		if leftErr != nil {
+// 			return nil, leftErr
+// 		}
+// 		if rightErr != nil {
+// 			return nil, rightErr
+// 		}
+//
+// 		// Rest of the infix expression compilation remains the same
+// 		switch e.Operator {
+// 		case "+":
+// 			return c.block.NewAdd(left, right), nil
+// 		case "-":
+// 			return c.block.NewSub(left, right), nil
+// 		case "*":
+// 			return c.block.NewMul(left, right), nil
+// 		case "/":
+// 			return c.block.NewSDiv(left, right), nil
+// 		case "%":
+// 			return c.block.NewSRem(left, right), nil
+// 		case "==":
+// 			cmp := c.block.NewICmp(enum.IPredEQ, left, right)
+// 			// Convert i1 to i64 (0 or 1)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		case "!=":
+// 			cmp := c.block.NewICmp(enum.IPredNE, left, right)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		case "<":
+// 			cmp := c.block.NewICmp(enum.IPredSLT, left, right)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		case ">":
+// 			cmp := c.block.NewICmp(enum.IPredSGT, left, right)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		case "<=":
+// 			cmp := c.block.NewICmp(enum.IPredSLE, left, right)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		case ">=":
+// 			cmp := c.block.NewICmp(enum.IPredSGE, left, right)
+// 			return c.block.NewZExt(cmp, types.I64), nil
+// 		default:
+// 			return nil, fmt.Errorf("unknown infix operator: %s", e.Operator)
+// 		}
+//
+// 	case *CallExpression:
+// 		if e.Function == nil {
+// 			return nil, fmt.Errorf("nil function in call expression")
+// 		}
+// 		function, err := c.compileExpression(e.Function)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		// Compile all arguments
+// 		args := []value.Value{}
+// 		for _, arg := range e.Arguments {
+// 			if arg == nil {
+// 				return nil, fmt.Errorf("nil argument in call expression")
+// 			}
+// 			compiledArg, err := c.compileExpression(arg)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			args = append(args, compiledArg)
+// 		}
+//
+// 		// Call the function
+// 		return c.block.NewCall(function, args...), nil
+//
+// 	case *AssignmentExpression:
+// 		if e.Name == nil || e.Value == nil {
+// 			return nil, fmt.Errorf("invalid assignment expression")
+// 		}
+// 		// Compile the right side of the assignment
+// 		val, err := c.compileExpression(e.Value)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		// Find the variable
+// 		symbol, ok := c.symtab.Resolve(e.Name.Value)
+// 		if !ok {
+// 			return nil, fmt.Errorf("variable %s not defined", e.Name.Value)
+// 		}
+//
+// 		// If it's an alloca (local variable), store the value
+// 		if allocaVal, ok := symbol.Value.(*ir.InstAlloca); ok {
+// 			c.block.NewStore(val, allocaVal)
+// 			return val, nil
+// 		}
+//
+// 		return nil, fmt.Errorf("cannot assign to non-variable %s", e.Name.Value)
+//
+// 	case *FunctionLiteral:
+// 		// Create a new function
+// 		var funcName string
+// 		if e.Name != "" {
+// 			funcName = e.Name
+// 		} else {
+// 			funcName = fmt.Sprintf("anonymous_func_%d", len(c.module.Funcs))
+// 		}
+//
+// 		// Create parameter types (all i64 for simplicity)
+// 		paramTypes := []types.Type{}
+// 		for _ = range e.Parameters {
+// 			paramTypes = append(paramTypes, types.I64)
+// 		}
+//
+// 		// Create the function
+// 		fn := c.module.NewFunc(funcName, types.I64)
+//
+// 		// Add parameters
+// 		for i, param := range e.Parameters {
+// 			fn.Params[i].LocalName = param.Value
+// 		}
+//
+// 		// Save current state
+// 		oldBlock := c.block
+// 		oldFunc := c.currentFunction
+// 		oldSymTab := c.symtab
+//
+// 		// Create a new symbol table for the function scope
+// 		c.symtab = NewEnclosedSymbolTable(c.symtab)
+//
+// 		// Create an entry block
+// 		entryBlock := fn.NewBlock("entry")
+// 		c.block = entryBlock
+// 		c.currentFunction = fn
+//
+// 		// Add parameters to symbol table
+// 		for i, param := range e.Parameters {
+// 			c.symtab.Define(param.Value, fn.Params[i], LocalScope)
+// 		}
+//
+// 		// Compile function body
+// 		for _, stmt := range e.Body.Statements {
+// 			err := c.compileStatement(stmt)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 		}
+//
+// 		// Add an implicit return 0 if the function doesn't end with a return
+// 		if len(entryBlock.Insts) == 0 || entryBlock.Term == nil {
+// 			entryBlock.NewRet(constant.NewInt(types.I64, 0))
+// 		}
+//
+// 		// Restore previous state
+// 		c.block = oldBlock
+// 		c.currentFunction = oldFunc
+// 		c.symtab = oldSymTab
+//
+// 		// Define the function in the current scope
+// 		if e.Name != "" {
+// 			var scope SymbolScope
+// 			if c.currentFunction == nil {
+// 				scope = GlobalScope
+// 			} else {
+// 				scope = LocalScope
+// 			}
+// 			c.symtab.Define(e.Name, fn, scope)
+// 		}
+//
+// 		return fn, nil
+//
+// 	default:
+// 		return c.defaultCompileExpression(e)
+// 	}
+// }
+//
+// func (c *Compiler) defaultCompileExpression(expr Expression) (value.Value, error) {
+// 	switch e := expr.(type) {
+// 	case *IntegerLiteral:
+// 		return constant.NewInt(types.I64, e.Value), nil
+//
+// 	case *StringLiteral:
+// 		// Return a pointer to the first character of the string
+// 		strConst := c.getStringConstant(e.Value)
+// 		return c.block.NewGetElementPtr(types.I8, strConst, constant.NewInt(types.I64, 0), constant.NewInt(types.I64, 0)), nil
+//
+// 	// In compileExpression function, modify this section:
+// 	case *Identifier:
+// 		return c.compileIdentifier(e)
+// 		// if e == nil || e.Value == "" {
+// 		// 	return nil, fmt.Errorf("invalid identifier")
+// 		// }
+// 		// symbol, ok := c.symtab.Resolve(e.Value)
+// 		// if !ok {
+// 		// 	return nil, fmt.Errorf("variable %s not defined", e.Value)
+// 		// }
+// 		//
+// 		// // If it's a function, return it directly
+// 		// if funcVal, ok := symbol.Value.(*ir.Func); ok {
+// 		// 	return funcVal, nil
+// 		// }
+// 		//
+// 		// // Consistent handling of globals - ALWAYS load them
+// 		// if globalVal, ok := symbol.Value.(*ir.Global); ok {
+// 		// 	// For global values, we need to load them before use
+// 		// 	return c.block.NewLoad(types.I64, globalVal), nil
+// 		// }
+// 		//
+// 		// // For local variables, load the value from the alloca
+// 		// if allocaVal, ok := symbol.Value.(*ir.InstAlloca); ok {
+// 		// 	return c.block.NewLoad(types.I64, allocaVal), nil
+// 		// }
+// 		//
+// 		// return symbol.Value, nil
+//
+// 	// Other existing cases from the previous implementation
+// 	case *PrefixExpression:
+// 		if e.Right == nil {
+// 			return nil, fmt.Errorf("nil right operand in prefix expression")
+// 		}
+// 		right, err := c.compileExpression(e.Right)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		switch e.Operator {
+// 		case "-":
+// 			return c.block.NewSub(constant.NewInt(types.I64, 0), right), nil
+// 		default:
+// 			return nil, fmt.Errorf("unknown prefix operator: %s", e.Operator)
+// 		}
+//
+// 	case *CallExpression:
+// 		if e.Function == nil {
+// 			return nil, fmt.Errorf("nil function in call expression")
+// 		}
+// 		function, err := c.compileExpression(e.Function)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		// Compile all arguments
+// 		args := []value.Value{}
+// 		for _, arg := range e.Arguments {
+// 			if arg == nil {
+// 				return nil, fmt.Errorf("nil argument in call expression")
+// 			}
+// 			compiledArg, err := c.compileExpression(arg)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			args = append(args, compiledArg)
+// 		}
+//
+// 		// Call the function
+// 		return c.block.NewCall(function, args...), nil
+//
+// 	case *AssignmentExpression:
+// 		if e.Name == nil || e.Value == nil {
+// 			return nil, fmt.Errorf("invalid assignment expression")
+// 		}
+// 		// Compile the right side of the assignment
+// 		val, err := c.compileExpression(e.Value)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+//
+// 		// Find the variable
+// 		symbol, ok := c.symtab.Resolve(e.Name.Value)
+// 		if !ok {
+// 			return nil, fmt.Errorf("variable %s not defined", e.Name.Value)
+// 		}
+//
+// 		// If it's an alloca (local variable), store the value
+// 		if allocaVal, ok := symbol.Value.(*ir.InstAlloca); ok {
+// 			c.block.NewStore(val, allocaVal)
+// 			return val, nil
+// 		}
+//
+// 		return nil, fmt.Errorf("cannot assign to non-variable %s", e.Name.Value)
+//
+// 	case *FunctionLiteral:
+// 		// Rest of the function literal compilation remains the same as in the previous implementation
+// 		// Create a new function
+// 		var funcName string
+// 		if e.Name != "" {
+// 			funcName = e.Name
+// 		} else {
+// 			funcName = fmt.Sprintf("anonymous_func_%d", len(c.module.Funcs))
+// 		}
+//
+// 		// Create parameter types (all i64 for simplicity)
+// 		paramTypes := []types.Type{}
+// 		for _ = range e.Parameters {
+// 			paramTypes = append(paramTypes, types.I64)
+// 		}
+//
+// 		// Create the function
+// 		fn := c.module.NewFunc(funcName, types.I64)
+//
+// 		// Add parameters
+// 		for i, param := range e.Parameters {
+// 			fn.Params[i].LocalName = param.Value
+// 		}
+//
+// 		// Save current state
+// 		oldBlock := c.block
+// 		oldFunc := c.currentFunction
+// 		oldSymTab := c.symtab
+//
+// 		// Create a new symbol table for the function scope
+// 		c.symtab = NewEnclosedSymbolTable(c.symtab)
+//
+// 		// Create an entry block
+// 		entryBlock := fn.NewBlock("entry")
+// 		c.block = entryBlock
+// 		c.currentFunction = fn
+//
+// 		// Add parameters to symbol table
+// 		for i, param := range e.Parameters {
+// 			c.symtab.Define(param.Value, fn.Params[i], LocalScope)
+// 		}
+//
+// 		// Compile function body
+// 		for _, stmt := range e.Body.Statements {
+// 			err := c.compileStatement(stmt)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 		}
+//
+// 		// Add an implicit return 0 if the function doesn't end with a return
+// 		if len(entryBlock.Insts) == 0 || entryBlock.Term == nil {
+// 			entryBlock.NewRet(constant.NewInt(types.I64, 0))
+// 		}
+//
+// 		// Restore previous state
+// 		c.block = oldBlock
+// 		c.currentFunction = oldFunc
+// 		c.symtab = oldSymTab
+//
+// 		// Define the function in the current scope
+// 		if e.Name != "" {
+// 			var scope SymbolScope
+// 			if c.currentFunction == nil {
+// 				scope = GlobalScope
+// 			} else {
+// 				scope = LocalScope
+// 			}
+// 			c.symtab.Define(e.Name, fn, scope)
+// 		}
+//
+// 		return fn, nil
+//
+// 	default:
+// 		return nil, fmt.Errorf("unknown expression type: %T", expr)
+// 	}
+// }
+//
+// // SaveToFile saves the generated LLVM IR to a file
+// func (c *Compiler) SaveToFile(filename string) error {
+// 	return os.WriteFile(filename, []byte(c.module.String()), 0644)
+// }
+//
+// func main() {
+// 	if len(os.Args) < 2 {
+// 		fmt.Println("Usage: ./myCompiler <input_file>")
+// 		return
+// 	}
+// 	inputFile := os.Args[1]
+// 	baseName := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+// 	// Read input file
+// 	input, err := os.ReadFile(inputFile)
+// 	if err != nil {
+// 		fmt.Printf("Error reading input file: %v\n", err)
+// 		return
+// 	}
+// 	// Create lexer and parser
+// 	lexer := NewLexer(string(input))
+// 	parser := NewParser(lexer)
+// 	program := parser.ParseProgram()
+// 	if len(parser.Errors()) != 0 {
+// 		fmt.Println("Parser errors:")
+// 		for _, msg := range parser.Errors() {
+// 			fmt.Println("  " + msg)
+// 		}
+// 		return
+// 	}
+// 	// Create compiler and compile the program
+// 	compiler := NewCompiler()
+// 	err = compiler.Compile(program)
+//
+// 	// Check both explicit error and compiler errors
+// 	if err != nil {
+// 		fmt.Printf("Compilation error: %v\n", err)
+// 		return
+// 	}
+//
+// 	if len(compiler.Errors()) != 0 {
+// 		fmt.Println("Compiler errors:")
+// 		for _, msg := range compiler.Errors() {
+// 			fmt.Println("  " + msg)
+// 		}
+// 		return
+// 	}
+// 	// Save IR to file
+// 	irFile := baseName + ".ll"
+// 	err = compiler.SaveToFile(irFile)
+// 	if err != nil {
+// 		fmt.Printf("Error saving IR file: %v\n", err)
+// 		return
+// 	}
+// 	// Call clang to compile the IR into an executable
+// 	cmd := exec.Command("clang", irFile, "-o", baseName)
+// 	output, err := cmd.CombinedOutput()
+// 	if err != nil {
+// 		fmt.Printf("Error compiling with clang: %v\n%s\n", err, output)
+// 		return
+// 	}
+// 	fmt.Printf("Compilation successful. Binary saved as: %s\n", baseName)
+// }
