@@ -283,6 +283,7 @@ type FunctionLiteral struct {
 	Parameters []*Identifier
 	Body       *BlockStatement
 	Name       string
+	ReturnType string // Add this field
 }
 
 func (fl *FunctionLiteral) expressionNode()      {}
@@ -301,7 +302,11 @@ func (fl *FunctionLiteral) String() string {
 	}
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
-	out.WriteString(") ")
+	out.WriteString(")")
+	if fl.ReturnType != "" {
+		out.WriteString(": " + fl.ReturnType)
+	}
+	out.WriteString(" ")
 	out.WriteString(fl.Body.String())
 
 	return out.String()
@@ -434,3 +439,144 @@ type EmptyExpression struct {
 func (ee *EmptyExpression) expressionNode()      {}
 func (ee *EmptyExpression) TokenLiteral() string { return ee.Token.Literal }
 func (ee *EmptyExpression) String() string       { return "" }
+
+// FunctionStatement represents a function declaration
+type FunctionStatement struct {
+	Token      lexer.Token // the FUNCTION token
+	Name       *Identifier
+	Parameters []*Identifier
+	Body       *BlockStatement
+	ReturnType string
+}
+
+func (fs *FunctionStatement) statementNode()       {}
+func (fs *FunctionStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *FunctionStatement) String() string {
+	var out bytes.Buffer
+
+	params := []string{}
+	for _, p := range fs.Parameters {
+		params = append(params, p.String())
+	}
+
+	out.WriteString("function ")
+	out.WriteString(fs.Name.String())
+	out.WriteString("(")
+	out.WriteString(strings.Join(params, ", "))
+	out.WriteString(") ")
+	if fs.ReturnType != "" {
+		out.WriteString(": " + fs.ReturnType + " ")
+	}
+	out.WriteString(fs.Body.String())
+
+	return out.String()
+}
+
+// ForStatement represents a for loop
+type ForStatement struct {
+	Token     lexer.Token // the FOR token
+	Init      Statement
+	Condition Expression
+	Update    Statement
+	Body      *BlockStatement
+}
+
+func (fs *ForStatement) statementNode()       {}
+func (fs *ForStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *ForStatement) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("for(")
+	if fs.Init != nil {
+		out.WriteString(fs.Init.String())
+	}
+	out.WriteString("; ")
+	if fs.Condition != nil {
+		out.WriteString(fs.Condition.String())
+	}
+	out.WriteString("; ")
+	if fs.Update != nil {
+		out.WriteString(fs.Update.String())
+	}
+	out.WriteString(") ")
+	out.WriteString(fs.Body.String())
+
+	return out.String()
+}
+
+// ImportStatement represents an import statement
+type ImportStatement struct {
+	Token lexer.Token // the IMPORT token
+	Path  *StringLiteral
+}
+
+func (is *ImportStatement) statementNode()       {}
+func (is *ImportStatement) TokenLiteral() string { return is.Token.Literal }
+func (is *ImportStatement) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("import ")
+	out.WriteString(is.Path.String())
+	out.WriteString(";")
+
+	return out.String()
+}
+
+// StructDefinition represents a struct definition
+type StructDefinition struct {
+	Token  lexer.Token // the STRUCT token
+	Name   *Identifier
+	Fields []*StructField
+}
+
+func (sd *StructDefinition) expressionNode()      {}
+func (sd *StructDefinition) TokenLiteral() string { return sd.Token.Literal }
+func (sd *StructDefinition) String() string {
+	var out bytes.Buffer
+
+	fields := []string{}
+	for _, f := range sd.Fields {
+		fields = append(fields, f.String())
+	}
+
+	out.WriteString("struct ")
+	out.WriteString(sd.Name.String())
+	out.WriteString(" {\n")
+	out.WriteString(strings.Join(fields, "\n"))
+	out.WriteString("\n}")
+
+	return out.String()
+}
+
+// StructField represents a field in a struct
+type StructField struct {
+	Name *Identifier
+	Type string
+}
+
+func (sf *StructField) String() string {
+	return sf.Name.String() + ": " + sf.Type
+}
+
+// ArrayLiteral represents an array literal
+type ArrayLiteral struct {
+	Token    lexer.Token // the '[' token
+	Elements []Expression
+}
+
+func (al *ArrayLiteral) expressionNode()      {}
+func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Literal }
+func (al *ArrayLiteral) String() string {
+	var out bytes.Buffer
+
+	elements := []string{}
+	for _, el := range al.Elements {
+		elements = append(elements, el.String())
+	}
+
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("]")
+
+	return out.String()
+}

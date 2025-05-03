@@ -188,7 +188,12 @@ func (g *Generator) Generate(program *ast.Program) (*ir.Module, error) {
 }
 
 // generateStatement generates code for a statement
+// generateStatement generates code for a statement with improved error handling
 func (g *Generator) generateStatement(stmt ast.Statement) (value.Value, error) {
+	if stmt == nil {
+		return nil, fmt.Errorf("nil statement")
+	}
+
 	switch stmt := stmt.(type) {
 	case *ast.VarStatement:
 		return g.generateVarStatement(stmt)
@@ -207,9 +212,196 @@ func (g *Generator) generateStatement(stmt ast.Statement) (value.Value, error) {
 		return g.generateWhileStatement(stmt)
 	case *ast.PrintStatement:
 		return g.generatePrintStatement(stmt)
+	case *ast.FunctionStatement:
+		return g.generateFunctionStatement(stmt)
+	case *ast.ForStatement:
+		return g.generateForStatement(stmt)
+	case *ast.ImportStatement:
+		return g.generateImportStatement(stmt)
 	default:
 		return nil, fmt.Errorf("unknown statement type: %T", stmt)
 	}
+}
+
+// Add new statement handlers for advanced language features
+func (g *Generator) generateFunctionStatement(stmt *ast.FunctionStatement) (value.Value, error) {
+	// Generate a function from a function statement
+	funcLit := &ast.FunctionLiteral{
+		Name:       stmt.Name.Value,
+		Parameters: stmt.Parameters,
+		Body:       stmt.Body,
+		ReturnType: stmt.ReturnType,
+	}
+
+	return g.generateFunctionLiteral(funcLit)
+}
+
+func (g *Generator) generateForStatement(stmt *ast.ForStatement) (value.Value, error) {
+	// Generate code for for-loop construct
+	// This is a simplified example - you'll need to implement the full logic
+
+	// Get current function
+	fn := g.context.currentFunction
+
+	// Create blocks for the for loop
+	initBlock := fn.NewBlock(fmt.Sprintf("for.init.%d", g.blockCounter))
+	g.blockCounter++
+
+	condBlock := fn.NewBlock(fmt.Sprintf("for.cond.%d", g.blockCounter))
+	g.blockCounter++
+
+	bodyBlock := fn.NewBlock(fmt.Sprintf("for.body.%d", g.blockCounter))
+	g.blockCounter++
+
+	updateBlock := fn.NewBlock(fmt.Sprintf("for.update.%d", g.blockCounter))
+	g.blockCounter++
+
+	endBlock := fn.NewBlock(fmt.Sprintf("for.end.%d", g.blockCounter))
+	g.blockCounter++
+
+	// Generate initialization
+	if stmt.Init != nil {
+		_, err := g.generateStatement(stmt.Init)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	initBlock.NewBr(condBlock)
+
+	// Generate condition
+	var condBool value.Value
+	if stmt.Condition != nil {
+		condVal, err := g.generateExpression(stmt.Condition)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert to boolean if needed
+		if condVal.Type().Equal(types.I1) {
+			condBool = condVal
+		} else {
+			intType, ok := condVal.Type().(*types.IntType)
+			if !ok {
+				return nil, fmt.Errorf("expected int type for condition, got %T", condVal.Type())
+			}
+			condBool = condBlock.NewICmp(enum.IPredNE, condVal, constant.NewInt(intType, 0))
+		}
+	} else {
+		// If no condition, use true (infinite loop)
+		condBool = constant.NewInt(types.I1, 1)
+	}
+
+	condBlock.NewCondBr(condBool, bodyBlock, endBlock)
+
+	// Generate body
+	_, err := g.generateStatement(stmt.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	bodyBlock.NewBr(updateBlock)
+
+	// Generate update
+	if stmt.Update != nil {
+		_, err := g.generateStatement(stmt.Update)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	updateBlock.NewBr(condBlock)
+
+	return nil, nil
+}
+
+func (g *Generator) generateImportStatement(stmt *ast.ImportStatement) (value.Value, error) {
+	// Handle import statements - this will depend on how your language handles imports
+	// For now, simply register the imported module name
+	fmt.Printf("Importing module: %s\n", stmt.Path.Value)
+
+	// In a real implementation, you'd need to load and process the imported module
+	// This might involve reading files, resolving dependencies, etc.
+
+	return nil, nil
+}
+
+// Add support for user-defined types
+func (g *Generator) generateStructDefinition(expr *ast.StructDefinition) (value.Value, error) {
+	// Create a new struct type
+	fields := make([]types.Type, len(expr.Fields))
+
+	for i, field := range expr.Fields {
+		// Map field type to LLVM type
+		switch field.Type {
+		case "int":
+			fields[i] = types.I32
+		case "string":
+			fields[i] = types.NewPointer(types.I8)
+		case "bool":
+			fields[i] = types.I1
+		default:
+			// For custom types, we'd need to look them up in a type registry
+			fields[i] = types.I32 // Default to int for now
+		}
+	}
+
+	// Create the struct type
+	structType := types.NewStruct(fields...)
+
+	// Register the type with a name
+	g.module.NewTypeDef(expr.Name.Value, structType)
+
+	return nil, nil
+}
+
+// Add support for array literals
+func (g *Generator) generateArrayLiteral(expr *ast.ArrayLiteral) (value.Value, error) {
+	if len(expr.Elements) == 0 {
+		return nil, fmt.Errorf("empty array literals not supported yet")
+	}
+
+	// Generate code for the first element to determine array type
+	firstElem, err := g.generateExpression(expr.Elements[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Create an array type
+	arrayType := types.NewArray(uint64(len(expr.Elements)), firstElem.Type())
+
+	// Generate all elements
+	elements := make([]constant.Constant, len(expr.Elements))
+
+	for i, elem := range expr.Elements {
+		elemVal, err := g.generateExpression(elem)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert to constant if needed
+		elemConst, ok := elemVal.(constant.Constant)
+		if !ok {
+			return nil, fmt.Errorf("array elements must be constants")
+		}
+
+		elements[i] = elemConst
+	}
+
+	// Create array constant
+	arrayConst := constant.NewArray(arrayType, elements...)
+
+	// Get current function and block
+	fn := g.context.currentFunction
+	currentBlock := fn.Blocks[len(fn.Blocks)-1]
+
+	// Allocate space for the array
+	arrayAlloca := currentBlock.NewAlloca(arrayType)
+
+	// Store the array constant
+	currentBlock.NewStore(arrayConst, arrayAlloca)
+
+	return arrayAlloca, nil
 }
 
 func (g *Generator) debugExpression(expr ast.Expression) {
@@ -286,30 +478,6 @@ func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression)
 func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, error) {
 	if g.context.currentFunction == nil {
 		// Global variable handling
-		var initFunc *ir.Func
-		var initBlock *ir.Block
-
-		// Check if global_init exists
-		for _, fn := range g.module.Funcs {
-			if fn.Name() == "global_init" {
-				initFunc = fn
-				break
-			}
-		}
-
-		// Create global_init if not exists
-		if initFunc == nil {
-			initFunc = g.module.NewFunc("global_init", types.Void)
-			initBlock = initFunc.NewBlock("entry")
-			initBlock.NewRet(nil)
-		} else {
-			if len(initFunc.Blocks) > 0 {
-				initBlock = initFunc.Blocks[0]
-			} else {
-				initBlock = initFunc.NewBlock("entry")
-				initBlock.NewRet(nil)
-			}
-		}
 
 		// Generate the value
 		val, err := g.generateExpression(stmt.Value)
@@ -322,7 +490,7 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 			// Simply use the function directly
 			g.context.namedValues[stmt.Name.Value] = funcVal
 
-			// If needed, you can rename the function
+			// If needed, rename the function
 			if funcVal.Name() != stmt.Name.Value && len(funcVal.Blocks) == 0 {
 				// Only rename empty functions (declarations)
 				funcVal.SetName(stmt.Name.Value)
@@ -330,10 +498,60 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 
 			return funcVal, nil
 		} else {
-			// Create global variable with zero value
+			// Create global variable with proper initialization
 			global := g.module.NewGlobal(stmt.Name.Value, val.Type())
-			global.Init = constant.NewZeroInitializer(val.Type())
-			initBlock.NewStore(val, global)
+
+			// Try to use constant initialization if possible
+			if constVal, ok := val.(constant.Constant); ok {
+				global.Init = constVal
+			} else {
+				global.Init = constant.NewZeroInitializer(val.Type())
+
+				// Create a global initializer function if needed for non-constant initializers
+				var initFunc *ir.Func
+
+				// Look for existing global initializer
+				for _, fn := range g.module.Funcs {
+					if fn.Name() == "global_init" {
+						initFunc = fn
+						break
+					}
+				}
+
+				// Create global_init if it doesn't exist
+				if initFunc == nil {
+					initFunc = g.module.NewFunc("global_init", types.NewFunc(types.Void))
+					initBlock := initFunc.NewBlock("entry")
+					initBlock.NewRet(nil)
+
+					// Add a call to global_init from main
+					for _, fn := range g.module.Funcs {
+						if fn.Name() == "main" {
+							mainEntry := fn.Blocks[0]
+							mainEntry.Insts = append([]ir.Instruction{mainEntry.NewCall(initFunc)},
+								mainEntry.Insts...)
+							break
+						}
+					}
+				}
+
+				// Get the entry block
+				entryBlock := initFunc.Blocks[0]
+
+				// Add store instruction to initialize the global
+				storeInst := entryBlock.NewStore(val, global)
+
+				// Insert before return instruction
+				if entryBlock.Term != nil {
+					insertPos := len(entryBlock.Insts) - 1
+					entryBlock.Insts = append(entryBlock.Insts[:insertPos],
+						append([]ir.Instruction{storeInst},
+							entryBlock.Insts[insertPos:]...)...)
+				} else {
+					entryBlock.Insts = append(entryBlock.Insts, storeInst)
+				}
+			}
+
 			g.context.namedValues[stmt.Name.Value] = global
 			return global, nil
 		}
@@ -601,7 +819,6 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 }
 
 // generatePrintStatement generates code for a print statement
-// generatePrintStatement generates code for a print statement
 func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Value, error) {
 	// Check if we have a current function
 	if g.context.currentFunction == nil {
@@ -609,25 +826,11 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Check if we have any blocks in the function
-	if len(g.context.currentFunction.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "ERROR: Function has no blocks when generating print statement\n")
-		// Create an entry block as a fallback
-		entryBlock := g.context.currentFunction.NewBlock("entry")
-		g.context.blocks["entry"] = entryBlock
-	}
-
 	// Generate the value to print
 	val, err := g.generateExpression(stmt.Value)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Failed to generate value for print statement: %v\n", err)
 		return nil, err
-	}
-
-	// Check if value is nil
-	if val == nil {
-		fmt.Fprintf(os.Stderr, "WARNING: Print expression evaluated to nil\n")
-		val = constant.NewInt(types.I32, 0) // Default value
 	}
 
 	// Get current block safely
@@ -645,7 +848,7 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 
 	switch val.Type().(type) {
 	case *types.IntType:
-		formatStr = "%d\n" // Use actual newline, not escape sequence
+		formatStr = "%d\n"
 		printVal = val
 	case *types.FloatType:
 		formatStr = "%f\n"
@@ -657,7 +860,7 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 			return nil, fmt.Errorf("expected pointer type, got %T", val.Type())
 		}
 		if pointerType.ElemType != nil && pointerType.ElemType.Equal(types.I8) {
-			formatStr = "%s\n" // No escape sequence for newlines
+			formatStr = "%s\n"
 			printVal = val
 		} else {
 			formatStr = "%p\n"
@@ -671,23 +874,23 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 	// Create format string constant
 	formatStrConst := g.getStringConstant(formatStr)
 
-	// Generate printf call - find printf function
-	var printfFn *ir.Func
-	for _, fn := range g.module.Funcs {
-		if fn.Name() == "printf" {
-			printfFn = fn
-			break
+	// Use printf function from module
+	printfFn := g.printfFunc
+	if printfFn == nil {
+		for _, fn := range g.module.Funcs {
+			if fn.Name() == "printf" {
+				printfFn = fn
+				break
+			}
 		}
 	}
-
-	printfFn = g.printfFunc
 
 	if printfFn == nil {
 		fmt.Fprintf(os.Stderr, "ERROR: printf function not found\n")
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Create the call with panic protection
+	// Create the printf call with appropriate parameters
 	var result value.Value
 	func() {
 		defer func() {
@@ -697,17 +900,7 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 			}
 		}()
 
-		switch val.Type().(type) {
-		case *types.IntType:
-			result = currentBlock.NewCall(printfFn, formatStrConst, printVal)
-		case *types.FloatType:
-			result = currentBlock.NewCall(printfFn, formatStrConst, printVal)
-		case *types.PointerType:
-			result = currentBlock.NewCall(printfFn, formatStrConst, printVal)
-		default:
-			// Use a generic string format for other types
-			result = currentBlock.NewCall(printfFn, formatStrConst)
-		}
+		result = currentBlock.NewCall(printfFn, formatStrConst, printVal)
 	}()
 
 	if result == nil {
@@ -725,13 +918,22 @@ func (g *Generator) getStringConstant(str string) value.Value {
 		return global
 	}
 
-	// Process escapes properly - Convert \n to actual newlines, etc.
-	processedStr := strings.ReplaceAll(str, "\\n", "\n")
+	// Process escape sequences in the string
+	processedStr := str
 
-	// Create a new string constant - use proper null termination
-	strType := types.NewArray(uint64(len(processedStr)+1), types.I8)
+	// Create a properly null-terminated string constant
+	// Only add null terminator if it doesn't already have one
+	if !strings.HasSuffix(processedStr, "\x00") {
+		processedStr = processedStr + "\x00"
+	}
+
+	// Calculate the exact length including the null terminator
+	arrayLength := uint64(len(processedStr))
+
+	// Create a string constant
+	strType := types.NewArray(arrayLength, types.I8)
 	strConst := g.module.NewGlobalDef(fmt.Sprintf(".str.%d", g.stringCounter),
-		constant.NewCharArrayFromString(processedStr+"\x00"))
+		constant.NewCharArrayFromString(processedStr))
 	g.stringCounter++
 
 	// Create a GEP instruction to get the pointer to the first character
@@ -1167,359 +1369,829 @@ func CompileToLLVM(program *ast.Program) (string, error) {
 	// Get the generated IR
 	ir := buf.String()
 
-	// Extract the string constant definitions - we'll keep these
-	// Extract the string constant definitions - we'll keep these
-	var stringConstants strings.Builder
-	strConstPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*`)
-	stringConstMatches := strConstPattern.FindAllString(ir, -1)
-	for _, match := range stringConstMatches {
-		// Replace escaped newlines with actual newlines and ensure proper null termination
-		// Don't add extra newlines if not needed
-		cleanedMatch := strings.ReplaceAll(match, "\\00", "\\00")
-		// Don't replace \\0A (newline) with another newline - it's already represented correctly
-		stringConstants.WriteString(cleanedMatch + "\n")
+	// Apply our comprehensive fix
+	ir = comprehensiveIRFix(ir)
+
+	// Add standard format strings
+	formatStrings := `
+; Standard format strings
+@.fmt.int = private constant [4 x i8] c"%d\0A\00"
+@.fmt.str = private constant [4 x i8] c"%s\0A\00"
+@.fmt.float = private constant [4 x i8] c"%f\0A\00"
+@.fmt.bool = private constant [4 x i8] c"%d\0A\00"
+`
+	ir = ir + "\n" + formatStrings
+
+	return ir, nil
+}
+
+// Process string constants to ensure proper formatting
+func processStringConstants(ir string) string {
+	// Find all string constants
+	strConstPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*?c"([^"]*)".*`)
+
+	return strConstPattern.ReplaceAllStringFunc(ir, func(s string) string {
+		matches := strConstPattern.FindStringSubmatch(s)
+		if len(matches) > 1 {
+			content := matches[1]
+
+			// Replace escape sequences with their proper representation in LLVM IR
+			// Handle common escape sequences
+			content = strings.ReplaceAll(content, "\\n", "\\0A")  // Newline
+			content = strings.ReplaceAll(content, "\\t", "\\09")  // Tab
+			content = strings.ReplaceAll(content, "\\\"", "\\22") // Double quote
+			content = strings.ReplaceAll(content, "\\\\", "\\5C") // Backslash
+
+			// Ensure proper null termination
+			if !strings.HasSuffix(content, "\\00") {
+				content = content + "\\00"
+			}
+
+			// Reconstruct the string constant with proper escaping
+			reconstructed := strings.Replace(s, matches[1], content, 1)
+			return reconstructed
+		}
+		return s
+	})
+}
+
+func getStandardFunctionDeclarations(shouldIncludePrintf bool) string {
+	var decls strings.Builder
+
+	decls.WriteString("\n; Standard C library function declarations\n")
+
+	// Only include printf if requested
+	if shouldIncludePrintf {
+		decls.WriteString("declare i32 @printf(i8*, ...)\n")
 	}
 
-	// Fix function definitions with the wrong syntax
+	decls.WriteString("declare i8* @malloc(i64)\n")
+	decls.WriteString("declare void @free(i8*)\n")
+	decls.WriteString("declare i64 @strlen(i8*)\n")
+	decls.WriteString("declare i8* @strcpy(i8*, i8*)\n")
+	decls.WriteString("declare i32 @abs(i32)\n")
+	decls.WriteString("declare double @pow(double, double)\n")
+	decls.WriteString("declare void @exit(i32)\n")
+
+	decls.WriteString("\n; Standard format strings\n")
+	decls.WriteString("@.fmt.int = private constant [4 x i8] c\"%d\\0A\\00\"\n")
+	decls.WriteString("@.fmt.str = private constant [4 x i8] c\"%s\\0A\\00\"\n")
+	decls.WriteString("@.fmt.float = private constant [4 x i8] c\"%f\\0A\\00\"\n")
+	decls.WriteString("@.fmt.bool = private constant [4 x i8] c\"%d\\0A\\00\"\n")
+
+	return decls.String()
+}
+
+func fixFunctionDeclarations(ir string) string {
+	// First completely remove all existing declarations of standard library functions
+	// This ensures we don't have any duplicates or malformed declarations
+	stdlibFuncs := []string{"printf", "malloc", "free", "strlen", "strcpy", "abs", "pow", "exit"}
+
+	for _, funcName := range stdlibFuncs {
+		pattern := regexp.MustCompile(`declare\s+[^@]*@` + funcName + `[^\n]*\n`)
+		ir = pattern.ReplaceAllString(ir, "")
+	}
+
+	// Add our own properly formatted declarations at the beginning
+	stdlibDecls := `
+	; Standard C library function declarations
+	declare i32 @printf(i8*, ...)
+	declare i8* @malloc(i64)
+	declare void @free(i8*)
+	declare i64 @strlen(i8*)
+	declare i8* @strcpy(i8*, i8*)
+	declare i32 @abs(i32)
+	declare double @pow(double, double)
+	declare void @exit(i32)
+	`
+	ir = stdlibDecls + ir
+
+	// Fix function definitions with wrong syntax
 	// e.g., "define i32 (i32) @factorial()" -> "define i32 @factorial(i32)"
 	funcDefPattern := regexp.MustCompile(`define\s+([a-zA-Z0-9*]+)\s+\(([^)]+)\)\s+@([a-zA-Z0-9_]+)\(\)`)
 	ir = funcDefPattern.ReplaceAllString(ir, "define $1 @$3($2)")
 
-	// Fix main function specifically
-	mainFuncPattern := regexp.MustCompile(`define\s+i32\s+\(\)\s+@main\(\)`)
-	ir = mainFuncPattern.ReplaceAllString(ir, "define i32 @main()")
-
-	// Create custom factorial function
-	factorial := `
-define i32 @factorial(i32 %n) {
-entry:
-  %cmp = icmp sle i32 %n, 1
-  br i1 %cmp, label %if.then, label %if.else
-
-if.then:
-  ret i32 1
-
-if.else:
-  %sub = sub i32 %n, 1
-  %call = call i32 @factorial(i32 %sub)
-  %mul = mul i32 %n, %call
-  ret i32 %mul
-}
-`
-
-	// Create custom fibonacci function
-	fibonacci := `
-define i32 @fibonacci(i32 %n) {
-entry:
-  %cmp = icmp sle i32 %n, 0
-  br i1 %cmp, label %if.then, label %if.else
-
-if.then:
-  ret i32 0
-
-if.else:
-  %cmp1 = icmp eq i32 %n, 1
-  br i1 %cmp1, label %if.then1, label %if.else1
-
-if.then1:
-  ret i32 1
-
-if.else1:
-  %sub = sub i32 %n, 1
-  %call = call i32 @fibonacci(i32 %sub)
-  %sub1 = sub i32 %n, 2
-  %call1 = call i32 @fibonacci(i32 %sub1)
-  %add = add i32 %call, %call1
-  ret i32 %add
-}
-`
-
-	// Create custom sum function
-	sum := `
-define i32 @sum(i32 %n) {
-entry:
-  %total = alloca i32
-  %i = alloca i32
-  store i32 0, i32* %total
-  store i32 1, i32* %i
-  br label %while.cond
-
-while.cond:
-  %i.val = load i32, i32* %i
-  %cmp = icmp sle i32 %i.val, %n
-  br i1 %cmp, label %while.body, label %while.end
-
-while.body:
-  %total.val = load i32, i32* %total
-  %i.val1 = load i32, i32* %i
-  %add = add i32 %total.val, %i.val1
-  store i32 %add, i32* %total
-  %i.val2 = load i32, i32* %i
-  %inc = add i32 %i.val2, 1
-  store i32 %inc, i32* %i
-  br label %while.cond
-
-while.end:
-  %total.val1 = load i32, i32* %total
-  ret i32 %total.val1
-}
-`
-
-	// Create custom findFirstMultipleOf7 function
-	findFirstMultipleOf7 := `
-define i32 @findFirstMultipleOf7(i32 %max) {
-entry:
-  %i = alloca i32
-  store i32 1, i32* %i
-  br label %while.cond
-
-while.cond:
-  %i.val = load i32, i32* %i
-  %cmp = icmp sle i32 %i.val, %max
-  br i1 %cmp, label %while.body, label %while.end
-
-while.body:
-  %i.val1 = load i32, i32* %i
-  %rem = srem i32 %i.val1, 7
-  %cmp1 = icmp eq i32 %rem, 0
-  br i1 %cmp1, label %if.then, label %if.end
-
-if.then:
-  %i.val2 = load i32, i32* %i
-  ret i32 %i.val2
-
-if.end:
-  %i.val3 = load i32, i32* %i
-  %inc = add i32 %i.val3, 1
-  store i32 %inc, i32* %i
-  br label %while.cond
-
-while.end:
-  ret i32 0
-}
-`
-	// Create a properly formatted main function for clean output
-	main := `
-define i32 @main() {
-entry:
-  ; Allocate local variables
-  %1 = alloca i32
-  %2 = alloca i32
-  %3 = alloca i32
-  %4 = alloca i32
-  
-  ; Initialize variables
-  store i32 5, i32* %1
-  store i32 10, i32* %2
-  
-  ; Calculate z = x + y
-  %5 = load i32, i32* %1
-  %6 = load i32, i32* %2
-  %7 = add i32 %5, %6
-  store i32 %7, i32* %3
-  
-  ; Print "Factorial calculation:" with a newline
-  %8 = getelementptr [25 x i8], [25 x i8]* @.str.0, i32 0, i32 0
-  %9 = call i32 (i8*, ...) @printf(i8* %8)
-  
-  ; Print factorial(5) with a newline
-  %10 = call i32 @factorial(i32 5)
-  %11 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %10)
-  
-  ; Print "Fibonacci calculation:" with a newline
-  %13 = getelementptr [25 x i8], [25 x i8]* @.str.2, i32 0, i32 0
-  %14 = call i32 (i8*, ...) @printf(i8* %13)
-  
-  ; Print fibonacci(10) with a newline
-  %15 = call i32 @fibonacci(i32 10)
-  %16 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %15)
-  
-  ; Print "Sum calculation (using while loop):" with a newline
-  %18 = getelementptr [38 x i8], [38 x i8]* @.str.3, i32 0, i32 0
-  %19 = call i32 (i8*, ...) @printf(i8* %18)
-  
-  ; Print sum(100) with a newline
-  %20 = call i32 @sum(i32 100)
-  %21 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %20)
-  
-  ; Calculate complex arithmetic
-  %23 = load i32, i32* %1
-  %24 = load i32, i32* %2
-  %25 = add i32 %23, %24
-  %26 = load i32, i32* %3
-  %27 = sub i32 %26, 5
-  %28 = mul i32 %25, %27
-  store i32 %28, i32* %4
-  
-  ; Print "Complex arithmetic result:" with a newline
-  %29 = getelementptr [29 x i8], [29 x i8]* @.str.4, i32 0, i32 0
-  %30 = call i32 (i8*, ...) @printf(i8* %29)
-  
-  ; Print result with a newline
-  %31 = load i32, i32* %4
-  %32 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %31)
-  
-  ; Print "Hello, world!" with a newline
-  %34 = getelementptr [16 x i8], [16 x i8]* @.str.6, i32 0, i32 0
-  %35 = call i32 (i8*, ...) @printf(i8* %34)
-  
-  ; Print "Comparison results:" with a newline
-  %36 = getelementptr [22 x i8], [22 x i8]* @.str.7, i32 0, i32 0
-  %37 = call i32 (i8*, ...) @printf(i8* %36)
-  
-  ; Print x < y with a newline
-  %38 = load i32, i32* %1
-  %39 = load i32, i32* %2
-  %40 = icmp slt i32 %38, %39
-  %41 = zext i1 %40 to i32
-  %42 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %41)
-  
-  ; Print x > y with a newline
-  %44 = load i32, i32* %1
-  %45 = load i32, i32* %2
-  %46 = icmp sgt i32 %44, %45
-  %47 = zext i1 %46 to i32
-  %48 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %47)
-  
-  ; Print x == 5 with a newline
-  %50 = load i32, i32* %1
-  %51 = icmp eq i32 %50, 5
-  %52 = zext i1 %51 to i32
-  %53 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %52)
-  
-  ; Print y != 10 with a newline
-  %55 = load i32, i32* %2
-  %56 = icmp ne i32 %55, 10
-  %57 = zext i1 %56 to i32
-  %58 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %57)
-  
-  ; Print "Nested if-else demonstration:" with a newline
-  %60 = getelementptr [32 x i8], [32 x i8]* @.str.8, i32 0, i32 0
-  %61 = call i32 (i8*, ...) @printf(i8* %60)
-  
-  ; if (x < 10) { ... } else { ... }
-  %62 = load i32, i32* %1
-  %63 = icmp slt i32 %62, 10
-  br i1 %63, label %if.then, label %if.else
-  
-if.then:
-  ; if (y > 5) { ... } else { ... }
-  %64 = load i32, i32* %2
-  %65 = icmp sgt i32 %64, 5
-  br i1 %65, label %if.then.inner, label %if.else.inner
-  
-if.then.inner:
-  ; Print "Both conditions are true" with a newline
-  %66 = getelementptr [27 x i8], [27 x i8]* @.str.9, i32 0, i32 0
-  %67 = call i32 (i8*, ...) @printf(i8* %66)
-  br label %if.end
-  
-if.else.inner:
-  ; Print "Only first condition is true" with a newline
-  %68 = getelementptr [31 x i8], [31 x i8]* @.str.11, i32 0, i32 0
-  %69 = call i32 (i8*, ...) @printf(i8* %68)
-  br label %if.end
-  
-if.else:
-  ; Print "First condition is false" with a newline
-  %70 = getelementptr [27 x i8], [27 x i8]* @.str.13, i32 0, i32 0
-  %71 = call i32 (i8*, ...) @printf(i8* %70)
-  br label %if.end
-  
-if.end:
-  ; Print "First multiple of 7:" with a newline
-  %72 = getelementptr [23 x i8], [23 x i8]* @.str.15, i32 0, i32 0
-  %73 = call i32 (i8*, ...) @printf(i8* %72)
-  
-  ; Print findFirstMultipleOf7(20) with a newline
-  %74 = call i32 @findFirstMultipleOf7(i32 20)
-  %75 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %74)
-  
-  ret i32 0
-}
-`
-
-	// Remove the existing function definitions that we're replacing
-	funcNames := []string{"factorial", "fibonacci", "sum", "findFirstMultipleOf7", "main"}
-	for _, name := range funcNames {
-		re := regexp.MustCompile(fmt.Sprintf(`define[^@]*@%s[^}]*}`, name))
-		ir = re.ReplaceAllString(ir, "")
-	}
-
-	// Add our custom function definitions
-	customFuncs := factorial + fibonacci + sum + findFirstMultipleOf7 + main
-
-	// Build the final IR
-	finalIR := getStandardFunctionDeclarations() + "\n" +
-		stringConstants.String() + "\n" +
-		customFuncs
-
-	return finalIR, nil
+	return ir
 }
 
-func getStandardFunctionDeclarations() string {
-	return `
-; Standard C library function declarations
-declare i32 @printf(i8*, ...)
-declare i8* @malloc(i64)
-declare void @free(i8*)
-declare i64 @strlen(i8*)
-declare i8* @strcpy(i8*, i8*)
-declare i32 @abs(i32)
-declare double @pow(double, double)
-declare void @exit(i32)
+func fixInstructionNumbering(ir string) string {
+	// Split IR into lines to process each line individually
+	lines := strings.Split(ir, "\n")
 
-; Format strings for clean output
-@.fmt.int = private constant [4 x i8] c"%d\0A\00"
-`
-}
+	// Process each function separately
+	currentFunction := ""
+	currentBlock := ""
+	blocksInFunction := make(map[string][]string)      // Maps function name to list of blocks
+	registerMaps := make(map[string]map[string]string) // Maps function name -> old register -> new register
+	nextRegisterNumber := make(map[string]int)         // Maps function name to next register number
 
-func fixFunctionDeclarations(ir string) string {
-	// Fix the specific issue with printf having duplicate variadic markers
-	ir = strings.Replace(ir,
-		"declare i32 @printf(i8*, ...)(...).",
-		"declare i32 @printf(i8*, ...).",
-		-1)
+	// First pass: Identify functions and blocks
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
 
-	// Fix printf declaration (handling all possible patterns)
-	patterns := []string{
-		"declare i32 @printf(i8*)",
-		"declare i32 (i8*) @printf",
-		"declare i32 (i8*) @printf(...)",
-		"declare i32 @printf(i8*, ...)(...)", // This is the problematic pattern!
-	}
-
-	for _, pattern := range patterns {
-		ir = strings.Replace(ir, pattern, "declare i32 @printf(i8*, ...)", -1)
-	}
-
-	// Fix other C library functions
-	functionFixes := map[string]string{
-		"declare i8* (i64) @malloc()":            "declare i8* @malloc(i64)",
-		"declare void (i8*) @free()":             "declare void @free(i8*)",
-		"declare i64 (i8*) @strlen()":            "declare i64 @strlen(i8*)",
-		"declare i8* (i8*, i8*) @strcpy()":       "declare i8* @strcpy(i8*, i8*)",
-		"declare i32 (i32) @abs()":               "declare i32 @abs(i32)",
-		"declare double (double, double) @pow()": "declare double @pow(double, double)",
-		"declare void (i32) @exit()":             "declare void @exit(i32)",
-	}
-
-	for pattern, replacement := range functionFixes {
-		ir = strings.Replace(ir, pattern, replacement, -1)
-	}
-
-	constPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*c"([^"]*)".*`)
-	ir = constPattern.ReplaceAllStringFunc(ir, func(s string) string {
-		matches := constPattern.FindStringSubmatch(s)
-		if len(matches) > 1 {
-			// Process escape sequences properly
-			content := strings.ReplaceAll(matches[1], "\\n", "\n")
-			content = strings.ReplaceAll(content, "\\00", "\x00")
-			// Recreate the string with proper escaping
-			return strings.Replace(s, matches[1], content, 1)
+		// Detect function definition
+		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
+			funcNamePattern := regexp.MustCompile(`@([a-zA-Z0-9_.]+)`)
+			matches := funcNamePattern.FindStringSubmatch(trimmedLine)
+			if len(matches) >= 2 {
+				currentFunction = matches[1]
+				blocksInFunction[currentFunction] = []string{}
+				registerMaps[currentFunction] = make(map[string]string)
+				nextRegisterNumber[currentFunction] = 1 // Start with %1
+			}
 		}
-		return s
-	})
+
+		// Detect block labels
+		if strings.HasSuffix(trimmedLine, ":") && currentFunction != "" {
+			blockName := strings.TrimSuffix(trimmedLine, ":")
+			currentBlock = blockName
+			blocksInFunction[currentFunction] = append(blocksInFunction[currentFunction], currentBlock)
+		}
+	}
+
+	// Second pass: Process and rename registers across all blocks in each function
+	currentFunction = ""
+
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Update current function when we detect a function definition
+		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
+			funcNamePattern := regexp.MustCompile(`@([a-zA-Z0-9_.]+)`)
+			matches := funcNamePattern.FindStringSubmatch(trimmedLine)
+			if len(matches) >= 2 {
+				currentFunction = matches[1]
+			}
+		}
+
+		// Skip if not in a function
+		if currentFunction == "" {
+			continue
+		}
+
+		// Process register definitions
+		if strings.Contains(trimmedLine, " = ") {
+			regDefPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+			matches := regDefPattern.FindStringSubmatch(trimmedLine)
+			if len(matches) >= 2 {
+				oldReg := matches[1]
+
+				// Check if we already have a mapping for this register
+				if _, exists := registerMaps[currentFunction][oldReg]; !exists {
+					// Create a new register name
+					newReg := fmt.Sprintf("%%%d", nextRegisterNumber[currentFunction])
+					nextRegisterNumber[currentFunction]++
+
+					// Store the mapping
+					registerMaps[currentFunction][oldReg] = newReg
+				}
+
+				// Replace the register definition
+				newReg := registerMaps[currentFunction][oldReg]
+				lines[i] = strings.Replace(line, oldReg+" =", newReg+" =", 1)
+			}
+		}
+
+		// Replace register usages (but not in definitions)
+		for oldReg, newReg := range registerMaps[currentFunction] {
+			if !strings.Contains(line, oldReg+" =") {
+				// This ensures we only replace complete register names, not partial matches
+				pattern := regexp.MustCompile(`(^|[^%0-9])` + regexp.QuoteMeta(oldReg) + `($|[^0-9])`)
+				lines[i] = pattern.ReplaceAllString(lines[i], "${1}"+newReg+"${2}")
+			}
+		}
+	}
+
+	// Rejoin the lines
+	return strings.Join(lines, "\n")
+}
+
+func fixFunctionPointerUsage(ir string) string {
+	// Split IR into lines to process each line individually
+	lines := strings.Split(ir, "\n")
+
+	// Process each line
+	for i, line := range lines {
+		// Look for function types in return statements
+		if strings.Contains(line, "ret ") {
+			// Check if there's a function type being used in a return statement
+			// Pattern: ret i32 (i32) %reg
+			retFuncPattern := regexp.MustCompile(`ret\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
+			matches := retFuncPattern.FindStringSubmatch(line)
+
+			if len(matches) >= 4 {
+				// Extract the return type and register
+				returnType := matches[1]
+				register := matches[3]
+
+				// Replace the function type with a simple value type
+				lines[i] = strings.Replace(line,
+					"ret "+returnType+" ("+matches[2]+") "+register,
+					"ret "+returnType+" "+register, 1)
+			}
+		}
+
+		// Look for arithmetic operations on function types
+		if strings.Contains(line, "= add") ||
+			strings.Contains(line, "= sub") ||
+			strings.Contains(line, "= mul") ||
+			strings.Contains(line, "= div") ||
+			strings.Contains(line, "= rem") {
+
+			// Check if there's a function type being used in an arithmetic operation
+			// Pattern: i32 (i32) %reg
+			funcTypePattern := regexp.MustCompile(`(i[0-9]+)\s+\([^)]+\)\s+(%[0-9]+)`)
+			matches := funcTypePattern.FindAllStringSubmatch(line, -1)
+
+			if len(matches) > 0 {
+				modifiedLine := line
+				for _, match := range matches {
+					if len(match) >= 3 {
+						// Extract the return type and register
+						returnType := match[1]
+						register := match[2]
+
+						// Replace the function type with a simple value type
+						// This is a simplification - in a real compiler, you'd need to handle this properly
+						// by creating a proper function pointer variable
+						modifiedLine = strings.Replace(modifiedLine,
+							returnType+" ("+returnType+") "+register,
+							returnType+" "+register, 1)
+					}
+				}
+				lines[i] = modifiedLine
+			}
+		}
+
+		// Fix function call patterns if needed
+		if strings.Contains(line, "= call") {
+			// Check if there's a function pointer call
+			callPattern := regexp.MustCompile(`call\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
+			matches := callPattern.FindStringSubmatch(line)
+
+			if len(matches) >= 4 {
+				// Extract return type, argument types, and register
+				returnType := matches[1]
+				argTypes := matches[2]
+				register := matches[3]
+
+				// Fix the call syntax
+				lines[i] = strings.Replace(line,
+					"call "+returnType+" ("+argTypes+") "+register,
+					"call "+returnType+" "+register, 1)
+			}
+		}
+	}
+
+	// Rejoin the lines
+	return strings.Join(lines, "\n")
+}
+
+func fixCommonIRIssues(ir string) string {
+	// Fix function pointers in arithmetic operations, returns, and calls
+	ir = fixFunctionPointerUsage(ir)
+
+	// Fix function pointers in comparisons
+	comparisonPattern := regexp.MustCompile(`icmp\s+([a-z]+)\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
+	ir = comparisonPattern.ReplaceAllString(ir, `icmp $1 $2 $4`)
+
+	// Fix function pointers in memory operations
+	memoryPattern := regexp.MustCompile(`(load|store)\s+(i[0-9]+)\s+\(([^)]+)\)\s*,\s*(i[0-9]+)\s*\*\s*(%[0-9]+)`)
+	ir = memoryPattern.ReplaceAllString(ir, `$1 $2, $4* $5`)
+
+	// Fix function pointers in phi nodes
+	phiPattern := regexp.MustCompile(`phi\s+(i[0-9]+)\s+\(([^)]+)\)\s+\[([^,]+),\s*(%[a-zA-Z0-9.]+)\]`)
+	ir = phiPattern.ReplaceAllString(ir, `phi $1 [$3, $4]`)
+
+	// Fix function pointers in bitcast operations
+	bitcastPattern := regexp.MustCompile(`bitcast\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)\s+to`)
+	ir = bitcastPattern.ReplaceAllString(ir, `bitcast $1 $3 to`)
+
+	// Fix common syntax errors in function declarations
+	fnDeclPattern := regexp.MustCompile(`declare\s+(i[0-9]+|void)\s+\(([^)]+)\)\s+@([a-zA-Z0-9_]+)`)
+	ir = fnDeclPattern.ReplaceAllString(ir, `declare $1 @$3($2)`)
+
+	// Fix function definitions with wrong syntax
+	// e.g., "define i32 (i32) @factorial()" -> "define i32 @factorial(i32)"
+	funcDefPattern := regexp.MustCompile(`define\s+([a-zA-Z0-9*]+)\s+\(([^)]+)\)\s+@([a-zA-Z0-9_]+)\(\)`)
+	ir = funcDefPattern.ReplaceAllString(ir, `define $1 @$3($2)`)
+
+	// Remove duplicate function declarations
+	lines := strings.Split(ir, "\n")
+	declaredFunctions := make(map[string]bool)
+	cleanedLines := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "declare ") {
+			// Extract function name
+			namePattern := regexp.MustCompile(`@([a-zA-Z0-9_]+)`)
+			matches := namePattern.FindStringSubmatch(line)
+
+			if len(matches) >= 2 {
+				name := matches[1]
+				if declaredFunctions[name] {
+					// Skip duplicate declaration
+					continue
+				}
+				declaredFunctions[name] = true
+			}
+		}
+
+		cleanedLines = append(cleanedLines, line)
+	}
+
+	return strings.Join(cleanedLines, "\n")
+}
+
+func fixAdvancedInstructionOrdering(ir string) string {
+	// Split IR into lines to process each line individually
+	lines := strings.Split(ir, "\n")
+
+	// Process each function separately
+	currentFunction := ""
+	functions := make(map[string][]string) // Maps function name to all lines in that function
+	functionStarts := make(map[string]int) // Maps function name to starting line index
+	functionEnds := make(map[string]int)   // Maps function name to ending line index
+
+	// First pass: Identify function boundaries
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Detect function definition
+		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
+			funcNamePattern := regexp.MustCompile(`@([a-zA-Z0-9_.]+)`)
+			matches := funcNamePattern.FindStringSubmatch(trimmedLine)
+			if len(matches) >= 2 {
+				if currentFunction != "" {
+					// End previous function
+					functionEnds[currentFunction] = i - 1
+				}
+
+				currentFunction = matches[1]
+				functionStarts[currentFunction] = i
+				functions[currentFunction] = []string{}
+			}
+		}
+
+		// Add the line to the current function if we're in one
+		if currentFunction != "" {
+			functions[currentFunction] = append(functions[currentFunction], line)
+		}
+	}
+
+	// End the last function if there is one
+	if currentFunction != "" {
+		functionEnds[currentFunction] = len(lines) - 1
+	}
+
+	// Second pass: Process each function individually
+	for funcName, funcLines := range functions {
+		// Create a map of register definitions and usages
+		registerDefs := make(map[string]string)  // Maps register to its definition line
+		registerTypes := make(map[string]string) // Maps register to its type
+		registerUsages := make(map[string][]int) // Maps register to the line numbers where it's used
+		nextRegisterNumber := 1
+
+		// Scan each line in the function to identify register definitions and usages
+		for i, line := range funcLines {
+			trimmedLine := strings.TrimSpace(line)
+
+			// Find register definitions (lines containing " = ")
+			if strings.Contains(trimmedLine, " = ") {
+				defPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=\s*([^,]+)`)
+				matches := defPattern.FindStringSubmatch(trimmedLine)
+				if len(matches) >= 3 {
+					reg := matches[1]
+					opType := strings.TrimSpace(matches[2])
+
+					// Extract the type of the operation result
+					typePattern := regexp.MustCompile(`(alloca|load|store|add|sub|mul|div|rem|icmp|call|phi|select|bitcast|ptrtoint|inttoptr|getelementptr|zext|sext|trunc|fadd|fsub|fmul|fdiv)\s+([^ ,]+)`)
+					typeMatches := typePattern.FindStringSubmatch(opType)
+					if len(typeMatches) >= 3 {
+						registerDefs[reg] = line
+						registerTypes[reg] = typeMatches[2]
+					}
+				}
+			}
+
+			// Find register usages
+			// Instead of negative lookahead, we'll parse all registers and filter them
+			usagePattern := regexp.MustCompile(`%[0-9]+`)
+			usageMatches := usagePattern.FindAllString(trimmedLine, -1)
+
+			// Extract the register being defined in this line (if any)
+			var definedReg string
+			if strings.Contains(trimmedLine, " = ") {
+				defMatch := regexp.MustCompile(`\s*(%[0-9]+)\s*=`).FindStringSubmatch(trimmedLine)
+				if len(defMatch) >= 2 {
+					definedReg = defMatch[1]
+				}
+			}
+
+			// Process all register references except the one being defined
+			for _, reg := range usageMatches {
+				// Skip if this is the register being defined on this line
+				if reg == definedReg {
+					continue
+				}
+
+				// If the register hasn't been seen before, record the usage
+				if _, exists := registerUsages[reg]; !exists {
+					registerUsages[reg] = []int{}
+				}
+				registerUsages[reg] = append(registerUsages[reg], i)
+			}
+		}
+
+		// Process register renaming to ensure proper ordering
+		registerMap := make(map[string]string) // Maps old register to new register
+
+		// First rename registers that are defined before they're used
+		for oldReg := range registerDefs {
+			newReg := fmt.Sprintf("%%%d", nextRegisterNumber)
+			nextRegisterNumber++
+			registerMap[oldReg] = newReg
+		}
+
+		// Now apply the renaming to the function lines
+		for i, line := range funcLines {
+			// Replace register definitions
+			if strings.Contains(line, " = ") {
+				defPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+				matches := defPattern.FindStringSubmatch(line)
+				if len(matches) >= 2 {
+					oldReg := matches[1]
+					if newReg, exists := registerMap[oldReg]; exists {
+						funcLines[i] = strings.Replace(line, oldReg+" =", newReg+" =", 1)
+					}
+				}
+			}
+
+			// Replace register usages (but not in definitions)
+			for oldReg, newReg := range registerMap {
+				// Skip if this line defines this register (we already handled that above)
+				if strings.Contains(line, oldReg+" =") {
+					continue
+				}
+
+				// This ensures we only replace complete register names, not partial matches
+				pattern := regexp.MustCompile(`(^|[^%0-9])` + regexp.QuoteMeta(oldReg) + `($|[^0-9])`)
+				funcLines[i] = pattern.ReplaceAllString(funcLines[i], "${1}"+newReg+"${2}")
+			}
+		}
+
+		// Update the original lines with the processed function
+		startIdx := functionStarts[funcName]
+		endIdx := functionEnds[funcName]
+		for i := 0; i < endIdx-startIdx+1 && i < len(funcLines); i++ {
+			lines[startIdx+i] = funcLines[i]
+		}
+	}
+
+	// Third pass: Fix function pointers
+	ir = strings.Join(lines, "\n")
+	ir = fixFunctionPointerUsage(ir)
 
 	return ir
+}
+
+// Enhanced fix for all types of LLVM IR issues
+func completeIRFix(ir string) string {
+	// Process string constants
+	ir = processStringConstants(ir)
+
+	// Fix instruction numbering with advanced type and order handling
+	ir = fixAdvancedInstructionOrdering(ir)
+
+	// Fix function pointers and other common issues
+	ir = fixCommonIRIssues(ir)
+
+	// Fix function declarations
+	ir = fixFunctionDeclarations(ir)
+
+	// Remove extraneous whitespace from IR
+	ir = regularizeWhitespace(ir)
+
+	return ir
+}
+
+// Function to regularize whitespace in the IR for better readability
+func regularizeWhitespace(ir string) string {
+	lines := strings.Split(ir, "\n")
+	for i, line := range lines {
+		// Trim leading/trailing whitespace
+		line = strings.TrimSpace(line)
+
+		// Ensure consistent spacing around operators
+		line = regexp.MustCompile(`\s+`).ReplaceAllString(line, " ")
+		line = regexp.MustCompile(`(\s*=\s*)`).ReplaceAllString(line, " = ")
+		line = regexp.MustCompile(`(\s*,\s*)`).ReplaceAllString(line, ", ")
+
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func comprehensiveIRFix(ir string) string {
+	// First, apply string constant formatting
+	ir = processStringConstants(ir)
+
+	// Fix function declarations
+	ir = fixFunctionDeclarations(ir)
+
+	// Apply function pointer fixes
+	ir = fixFunctionPointerUsage(ir)
+
+	// Now perform register renumbering with direct text replacements
+	lines := strings.Split(ir, "\n")
+
+	// Process each function independently
+	inFunction := false
+	functionLines := []string{}
+	fixedLines := []string{}
+
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Detect function start
+		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
+			// If we were in a function, process it
+			if inFunction {
+				processedFunctionLines := rewriteRegisters(functionLines)
+				fixedLines = append(fixedLines, processedFunctionLines...)
+			}
+
+			// Start a new function
+			inFunction = true
+			functionLines = []string{line}
+			continue
+		}
+
+		// Detect function end (next function start or end of file)
+		if inFunction && (i == len(lines)-1 ||
+			(strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@"))) {
+			// Add the current line if it's the last one and not a new function
+			if i == len(lines)-1 && !strings.HasPrefix(trimmedLine, "define ") {
+				functionLines = append(functionLines, line)
+			}
+
+			// Process the complete function
+			processedFunctionLines := rewriteRegisters(functionLines)
+			fixedLines = append(fixedLines, processedFunctionLines...)
+
+			// Reset
+			inFunction = false
+			functionLines = []string{}
+
+			// If this was a new function definition, process it in the next iteration
+			if i != len(lines)-1 {
+				i--
+			}
+			continue
+		}
+
+		// Collect lines within a function
+		if inFunction {
+			functionLines = append(functionLines, line)
+		} else {
+			// Lines outside functions go straight to output
+			fixedLines = append(fixedLines, line)
+		}
+	}
+
+	// Join everything back
+	return strings.Join(fixedLines, "\n")
+}
+
+func rewriteRegisters(lines []string) []string {
+	// First, identify all register definitions and their dependencies
+	registers := make(map[string]struct{})
+	registerDefs := make(map[string]int)   // Maps register to the line where it's defined
+	registerUses := make(map[string][]int) // Maps register to lines where it's used
+
+	// First pass - identify all registers
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Find register definitions
+		if strings.Contains(trimmedLine, " = ") {
+			defPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+			matches := defPattern.FindStringSubmatch(trimmedLine)
+			if len(matches) >= 2 {
+				reg := matches[1]
+				registers[reg] = struct{}{}
+				registerDefs[reg] = i
+			}
+		}
+
+		// Find all register usages on this line
+		usePattern := regexp.MustCompile(`%[0-9]+`)
+		useMatches := usePattern.FindAllString(trimmedLine, -1)
+		for _, reg := range useMatches {
+			registers[reg] = struct{}{}
+
+			// Only track uses, not definitions
+			if !strings.Contains(trimmedLine, reg+" =") {
+				registerUses[reg] = append(registerUses[reg], i)
+			}
+		}
+	}
+
+	// Build a dependency graph
+	dependencies := make(map[string][]string) // register -> registers it depends on
+	for reg := range registers {
+		dependencies[reg] = []string{}
+	}
+
+	// For each register use, track which definition it depends on
+	for reg, useLines := range registerUses {
+		for _, useLine := range useLines {
+			// Find which register definition this use depends on
+			for defReg, defLine := range registerDefs {
+				if defLine < useLine { // Definition must come before use
+					dependencies[reg] = append(dependencies[reg], defReg)
+				}
+			}
+		}
+	}
+
+	// Create a new mapping for registers
+	newRegisterMap := make(map[string]string)
+	nextRegNum := 1
+
+	// Process all registers in order of their appearance in the function
+	for _, line := range lines {
+		// First process definitions
+		if strings.Contains(line, " = ") {
+			defPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+			matches := defPattern.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				oldReg := matches[1]
+				if _, exists := newRegisterMap[oldReg]; !exists {
+					newRegisterMap[oldReg] = fmt.Sprintf("%%%d", nextRegNum)
+					nextRegNum++
+				}
+			}
+		}
+
+		// Then process uses
+		usePattern := regexp.MustCompile(`%[0-9]+`)
+		useMatches := usePattern.FindAllString(line, -1)
+		for _, oldReg := range useMatches {
+			if _, exists := newRegisterMap[oldReg]; !exists {
+				// If we see a use before a definition, still assign it a new number
+				newRegisterMap[oldReg] = fmt.Sprintf("%%%d", nextRegNum)
+				nextRegNum++
+			}
+		}
+	}
+
+	// Apply the mapping to rewrite the function
+	rewrittenLines := make([]string, len(lines))
+	for i, line := range lines {
+		rewrittenLine := line
+
+		// First replace occurrences that are not definitions (to avoid partial matches)
+		for oldReg, newReg := range newRegisterMap {
+			// Skip if line contains the definition of this register
+			if strings.Contains(line, oldReg+" =") {
+				continue
+			}
+
+			// Replace the register, being careful about partial matches
+			pattern := regexp.MustCompile(`(^|[^%0-9])` + regexp.QuoteMeta(oldReg) + `($|[^0-9])`)
+			rewrittenLine = pattern.ReplaceAllString(rewrittenLine, "${1}"+newReg+"${2}")
+		}
+
+		// Then replace definitions
+		if strings.Contains(rewrittenLine, " = ") {
+			for oldReg, newReg := range newRegisterMap {
+				if strings.Contains(rewrittenLine, oldReg+" =") {
+					rewrittenLine = strings.Replace(rewrittenLine, oldReg+" =", newReg+" =", 1)
+					break // Only one definition per line
+				}
+			}
+		}
+
+		rewrittenLines[i] = rewrittenLine
+	}
+
+	return rewrittenLines
+}
+
+func fixLLVMRegisters(ir string) string {
+	// Split into lines
+	lines := strings.Split(ir, "\n")
+	processingFunction := false
+	functionLines := []string{}
+	resultLines := []string{}
+
+	for _, line := range lines {
+		// Detect function boundaries
+		if strings.HasPrefix(strings.TrimSpace(line), "define ") {
+			// If we were processing a function, finalize it
+			if processingFunction {
+				// Process the previous function
+				processedLines := renumberRegistersInFunction(functionLines)
+				resultLines = append(resultLines, processedLines...)
+				functionLines = []string{}
+			}
+
+			// Start a new function
+			processingFunction = true
+			functionLines = append(functionLines, line)
+		} else if processingFunction && strings.HasPrefix(strings.TrimSpace(line), "}") {
+			// End of function
+			functionLines = append(functionLines, line)
+			processedLines := renumberRegistersInFunction(functionLines)
+			resultLines = append(resultLines, processedLines...)
+			processingFunction = false
+			functionLines = []string{}
+		} else if processingFunction {
+			// Collecting lines within a function
+			functionLines = append(functionLines, line)
+		} else {
+			// Outside functions, pass through
+			resultLines = append(resultLines, line)
+		}
+	}
+
+	// Handle any remaining function
+	if processingFunction && len(functionLines) > 0 {
+		processedLines := renumberRegistersInFunction(functionLines)
+		resultLines = append(resultLines, processedLines...)
+	}
+
+	return strings.Join(resultLines, "\n")
+}
+
+func renumberRegistersInFunction(lines []string) []string {
+	// Map of old register names to new ones
+	registerMap := make(map[string]string)
+	nextRegister := 1
+
+	// Process each line
+	processedLines := make([]string, len(lines))
+
+	// Two-pass approach: first collect all register definitions
+	for i, line := range lines {
+		// Copy the line initially
+		processedLines[i] = line
+
+		// Look for register definitions
+		if strings.Contains(line, " = ") {
+			regDefPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+			matches := regDefPattern.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				oldReg := matches[1]
+				if _, exists := registerMap[oldReg]; !exists {
+					registerMap[oldReg] = fmt.Sprintf("%%%d", nextRegister)
+					nextRegister++
+				}
+			}
+		}
+
+		// Look for register usages (including in phi nodes, etc.)
+		regUsePattern := regexp.MustCompile(`%[0-9]+`)
+		matches := regUsePattern.FindAllString(line, -1)
+		for _, oldReg := range matches {
+			if oldReg != "" && !strings.Contains(line, oldReg+" =") {
+				if _, exists := registerMap[oldReg]; !exists {
+					registerMap[oldReg] = fmt.Sprintf("%%%d", nextRegister)
+					nextRegister++
+				}
+			}
+		}
+	}
+
+	// Second pass: apply the register mapping
+	for i, line := range lines {
+		newLine := line
+
+		// Replace register definitions
+		if strings.Contains(line, " = ") {
+			regDefPattern := regexp.MustCompile(`\s*(%[0-9]+)\s*=`)
+			matches := regDefPattern.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				oldReg := matches[1]
+				if newReg, exists := registerMap[oldReg]; exists {
+					newLine = strings.Replace(newLine, oldReg+" =", newReg+" =", 1)
+				}
+			}
+		}
+
+		// Replace register usages
+		for oldReg, newReg := range registerMap {
+			// Don't replace in definitions
+			if !strings.Contains(newLine, oldReg+" =") {
+				// Ensure we only replace whole register names
+				pattern := regexp.MustCompile(`(^|[^%0-9])` + regexp.QuoteMeta(oldReg) + `($|[^0-9])`)
+				newLine = pattern.ReplaceAllString(newLine, "${1}"+newReg+"${2}")
+			}
+		}
+
+		processedLines[i] = newLine
+	}
+
+	return processedLines
 }

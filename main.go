@@ -7,54 +7,75 @@ import (
 	"compiler/parser"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	// "io/ioutil"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
+	// "path/filepath"
+	// "strings"
 )
 
 func main() {
 	// Parse command line arguments
+	inputFile := flag.String("input", "", "Input file")
+	outputFile := flag.String("output", "output.ll", "Output file")
+	runOutput := flag.Bool("run", false, "Run the generated LLVM IR with lli")
 	flag.Parse()
-	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Println("Usage: compiler <source_file>")
+
+	// Check if input file is provided
+	if *inputFile == "" {
+		fmt.Fprintf(os.Stderr, "Error: No input file specified\n")
+		flag.Usage()
 		os.Exit(1)
 	}
-	sourceFile := args[0]
-	outputFile := strings.TrimSuffix(filepath.Base(sourceFile), filepath.Ext(sourceFile))
 
-	// Read the source file
-	source, err := ioutil.ReadFile(sourceFile)
+	// Read input file
+	input, err := os.ReadFile(*inputFile)
 	if err != nil {
-		fmt.Printf("Error reading source file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error reading input file: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Compile the source code
-	llvmIR, err := compile(string(source))
+	// Parse input
+	l := lexer.New(string(input))
+	p := parser.New(l)
+	program := p.ParseProgram()
+
+	// Check for parser errors
+	if len(p.Errors()) > 0 {
+		for _, err := range p.Errors() {
+			fmt.Fprintf(os.Stderr, "Parser error: %s\n", err)
+		}
+		os.Exit(1)
+	}
+
+	// Generate LLVM IR
+	ir, err := codegen.CompileToLLVM(program)
 	if err != nil {
-		fmt.Printf("Compilation error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Code generation error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Write the LLVM IR to a file
-	irFile := outputFile + ".ll"
-	err = ioutil.WriteFile(irFile, []byte(llvmIR), 0644)
+	// Write output to file
+	err = os.WriteFile(*outputFile, []byte(ir), 0644)
 	if err != nil {
-		fmt.Printf("Error writing LLVM IR file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error writing output file: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Compile the LLVM IR to an executable
-	err = compileIRToExecutable(irFile, outputFile)
-	if err != nil {
-		fmt.Printf("Error compiling LLVM IR to executable: %v\n", err)
-		os.Exit(1)
-	}
+	fmt.Printf("Successfully compiled %s to %s\n", *inputFile, *outputFile)
 
-	fmt.Printf("Successfully compiled to %s\n", outputFile)
+	// Optionally run the generated LLVM IR
+	if *runOutput {
+		fmt.Println("Running the compiled program:")
+		cmd := exec.Command("lli", *outputFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error running compiled program: %v\n", err)
+			os.Exit(1)
+		}
+	}
 }
 
 // compile compiles source code to LLVM IR

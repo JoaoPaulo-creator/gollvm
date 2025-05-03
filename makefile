@@ -2,7 +2,7 @@ build:
 	go build .
 
 compile:
-	./compiler input.xyz
+	./compiler -input input.xyz -output input.ll -run
 
 run:
 	./input
