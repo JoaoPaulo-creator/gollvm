@@ -4,7 +4,6 @@ import (
 	"compiler/ast"
 	"compiler/lexer"
 	"fmt"
-	"os"
 	"strconv"
 )
 
@@ -213,8 +212,6 @@ func (p *Parser) ParseProgram() *ast.Program {
 }
 
 func (p *Parser) parseStatement() ast.Statement {
-	fmt.Fprintf(os.Stderr, "Parsing statement with token: %s\n", p.curToken.Type)
-
 	switch p.curToken.Type {
 	case lexer.VAR:
 		return p.parseVarStatement()
@@ -276,12 +273,6 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 
 // Fixed function to properly parse function statements
 func (p *Parser) parseFunctionStatement() ast.Statement {
-	// Debug information to understand token sequence
-	fmt.Fprintf(os.Stderr, "Function statement: current token: %s (%s)\n",
-		p.curToken.Type, p.curToken.Literal)
-	fmt.Fprintf(os.Stderr, "Function statement: peek token: %s (%s)\n",
-		p.peekToken.Type, p.peekToken.Literal)
-
 	// We're at the 'fn' token right now
 	fnToken := p.curToken
 
@@ -294,7 +285,6 @@ func (p *Parser) parseFunctionStatement() ast.Statement {
 
 	// Now we're at the identifier, get the function name
 	functionName := p.curToken.Literal
-	fmt.Fprintf(os.Stderr, "Function name: %s\n", functionName)
 
 	// Create a function literal with the current name
 	lit := &ast.FunctionLiteral{
@@ -333,7 +323,6 @@ func (p *Parser) parseFunctionStatement() ast.Statement {
 		Value: lit,
 	}
 
-	fmt.Fprintf(os.Stderr, "Successfully parsed function: %s\n", functionName)
 	return stmt
 }
 

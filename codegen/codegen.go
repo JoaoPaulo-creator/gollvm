@@ -159,7 +159,6 @@ func (g *Generator) Generate(program *ast.Program) (*ir.Module, error) {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "Processing statement %d in main: %T\n", i, stmt)
 		_, err := g.generateStatement(stmt)
 		if err != nil {
 			return nil, fmt.Errorf("error processing statement %d: %w", i, err)
@@ -175,9 +174,6 @@ func (g *Generator) Generate(program *ast.Program) (*ir.Module, error) {
 	for _, fn := range g.module.Funcs {
 		for _, block := range fn.Blocks {
 			if block.Term == nil {
-				fmt.Fprintf(os.Stderr, "Adding terminator to block %s in function %s\n",
-					block.Name, fn.Name())
-
 				// Add appropriate terminator based on function return type
 				if fn.Sig.RetType.Equal(types.Void) {
 					block.NewRet(nil)
@@ -199,7 +195,6 @@ func (g *Generator) generateStatement(stmt ast.Statement) (value.Value, error) {
 	case *ast.ReturnStatement:
 		return g.generateReturnStatement(stmt)
 	case *ast.ExpressionStatement:
-		fmt.Fprintf(os.Stderr, "Processing expression statement with expression: %T\n", stmt.Expression)
 		if stmt.Expression == nil {
 			return nil, fmt.Errorf("nil expression in expression statement")
 		}
@@ -227,21 +222,7 @@ func (g *Generator) debugExpression(expr ast.Expression) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Expression type: %T\n", expr)
 }
-
-// func (g *Generator) debugExpression(expr ast.Expression) {
-// 	if expr == nil {
-// 		fmt.Fprintf(os.Stderr, "NIL EXPRESSION DETECTED\n")
-// 		// Print stack trace
-// 		buf := make([]byte, 1024)
-// 		n := runtime.Stack(buf, false)
-// 		fmt.Fprintf(os.Stderr, "Stack trace: %s\n", buf[:n])
-// 		return
-// 	}
-//
-// 	fmt.Fprintf(os.Stderr, "Expression type: %T\n", expr)
-// }
 
 // generateExpression generates code for an expression
 func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error) {
@@ -338,8 +319,6 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 
 		// Handle function declarations specially
 		if funcVal, ok := val.(*ir.Func); ok {
-			fmt.Fprintf(os.Stderr, "Found function declaration for %s\n", stmt.Name.Value)
-
 			// Simply use the function directly
 			g.context.namedValues[stmt.Name.Value] = funcVal
 
@@ -426,7 +405,6 @@ func (g *Generator) generateBlockStatement(stmt *ast.BlockStatement) (value.Valu
 	// Generate code for each statement in the block
 	var lastVal value.Value
 	for i, s := range stmt.Statements {
-		fmt.Fprintf(os.Stderr, "Generating statement %d in block: %T\n", i, s)
 		val, err := g.generateStatement(s)
 		if err != nil {
 			// Restore the original context before returning error
@@ -765,13 +743,9 @@ func (g *Generator) getStringConstant(str string) value.Value {
 
 // generateIdentifier generates code for an identifier
 func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error) {
-	// Debug the lookup
-	fmt.Fprintf(os.Stderr, "Looking up identifier: %s\n", expr.Value)
-
 	// Special handling for function identifiers - try to find the function in the module first
 	for _, fn := range g.module.Funcs {
 		if fn.Name() == expr.Value {
-			fmt.Fprintf(os.Stderr, "Found function %s as global identifier\n", expr.Value)
 			return fn, nil
 		}
 	}
@@ -779,8 +753,6 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 	// Then look up the variable in the context
 	val, ok := g.context.Lookup(expr.Value)
 	if !ok {
-		// Debug output to help diagnose the issue
-		fmt.Fprintf(os.Stderr, "Undefined variable: %s\n", expr.Value)
 		// Return a default value instead of crashing
 		fmt.Fprintf(os.Stderr, "WARNING: Using a default value (0) for undefined variable: %s\n", expr.Value)
 		return constant.NewInt(types.I32, 0), nil
@@ -977,9 +949,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		g.blockCounter++
 	}
 
-	// Debug output
-	fmt.Fprintf(os.Stderr, "Creating function: %s with %d parameters\n", funcName, len(expr.Parameters))
-
 	// Create parameter types (all i32 for now)
 	paramTypes := make([]types.Type, len(expr.Parameters))
 	for i := range paramTypes {
@@ -1000,10 +969,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 
 	// Store the entry block in the context
 	g.context.blocks["entry"] = entryBlock
-
-	// Debug the current function state
-	fmt.Fprintf(os.Stderr, "Function %s created with entry block, function has %d blocks now\n",
-		funcName, len(fn.Blocks))
 
 	// Give names to the parameters for debugging
 	for i, p := range fn.Params {
@@ -1027,14 +992,10 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 			entryBlock.NewStore(defaultValue, paramAlloca)
 		}
 
-		// Add to named values - this is critical to fix the lookup issue
-		fmt.Fprintf(os.Stderr, "Adding parameter %s to named values for function %s\n", param.Value, funcName)
 		g.context.namedValues[param.Value] = paramAlloca
 	}
 
 	// Generate code for the body
-	fmt.Fprintf(os.Stderr, "Generating body for function: %s, function has %d blocks\n",
-		funcName, len(fn.Blocks))
 	bodyVal, err := g.generateStatement(expr.Body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating body for function %s: %v\n", funcName, err)
@@ -1060,9 +1021,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		entryBlock.NewRet(constant.NewInt(types.I32, 0))
 	}
 
-	// Debug output when function is complete
-	fmt.Fprintf(os.Stderr, "Successfully generated function: %s\n", funcName)
-
 	// Restore context
 	g.context = oldContext
 
@@ -1083,10 +1041,6 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 		fmt.Fprintf(os.Stderr, "ERROR: Function expression evaluated to nil in call expression\n")
 		return constant.NewInt(types.I32, 0), nil
 	}
-
-	// Debug the function type
-	fmt.Fprintf(os.Stderr, "Function type in call: %T - %v\n", function.Type(), function.Type())
-
 	// Check if we have a function pointer (common case for function calls)
 	if _, ok := function.Type().(*types.IntType); ok {
 		fmt.Fprintf(os.Stderr, "WARNING: Attempting to call an integer as a function. This likely means the function lookup failed.\n")
@@ -1173,9 +1127,6 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 
 // WriteToFile writes the generated LLVM IR to a file
 func (g *Generator) WriteToFile(filename string) error {
-	// Dump the raw IR for debugging
-	dumpModuleIR(g.module)
-
 	// Generate LLVM IR to a string
 	var buf strings.Builder
 	_, err := g.module.WriteTo(&buf)
@@ -1202,9 +1153,6 @@ func CompileToLLVM(program *ast.Program) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	// Dump the raw IR for debugging
-	dumpModuleIR(module)
 
 	// Convert module to string
 	var buf strings.Builder
@@ -1496,12 +1444,4 @@ func fixFunctionDeclarations(ir string) string {
 	}
 
 	return ir
-}
-
-func dumpModuleIR(module *ir.Module) {
-	var buf strings.Builder
-	module.WriteTo(&buf)
-	fmt.Fprintf(os.Stderr, "==== Generated LLVM IR ====\n")
-	fmt.Fprintf(os.Stderr, "%s\n", buf.String())
-	fmt.Fprintf(os.Stderr, "==========================\n")
 }

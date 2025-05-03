@@ -66,13 +66,6 @@ func compile(source string) (string, error) {
 		return "", fmt.Errorf("lexer error: %v", err)
 	}
 
-	fmt.Println("==== Tokens ====")
-	for i, token := range tokens {
-		fmt.Printf("%d: Type=%s, Literal=%q, Line=%d, Column=%d\n",
-			i, token.Type, token.Literal, token.Line, token.Column)
-	}
-	fmt.Println("================")
-
 	// Syntax analysis
 	p := parser.NewWithTokens(tokens)
 	program := p.ParseProgram()
