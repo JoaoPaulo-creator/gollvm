@@ -645,10 +645,10 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 
 	switch val.Type().(type) {
 	case *types.IntType:
-		formatStr = "%d\\n"
+		formatStr = "%d\n" // Use actual newline, not escape sequence
 		printVal = val
 	case *types.FloatType:
-		formatStr = "%f\\n"
+		formatStr = "%f\n"
 		printVal = val
 	case *types.PointerType:
 		// Check if it's a string
@@ -657,15 +657,14 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 			return nil, fmt.Errorf("expected pointer type, got %T", val.Type())
 		}
 		if pointerType.ElemType != nil && pointerType.ElemType.Equal(types.I8) {
-			formatStr = "%s\\n"
+			formatStr = "%s\n" // No escape sequence for newlines
 			printVal = val
 		} else {
-			formatStr = "%p\\n"
+			formatStr = "%p\n"
 			printVal = val
 		}
 	default:
-		// For any other type, convert to string
-		formatStr = "%s\\n"
+		formatStr = "%s\n"
 		printVal = val
 	}
 
@@ -726,9 +725,13 @@ func (g *Generator) getStringConstant(str string) value.Value {
 		return global
 	}
 
-	// Create a new string constant
-	strType := types.NewArray(uint64(len(str)+1), types.I8)
-	strConst := g.module.NewGlobalDef(fmt.Sprintf(".str.%d", g.stringCounter), constant.NewCharArrayFromString(str+"\\00"))
+	// Process escapes properly - Convert \n to actual newlines, etc.
+	processedStr := strings.ReplaceAll(str, "\\n", "\n")
+
+	// Create a new string constant - use proper null termination
+	strType := types.NewArray(uint64(len(processedStr)+1), types.I8)
+	strConst := g.module.NewGlobalDef(fmt.Sprintf(".str.%d", g.stringCounter),
+		constant.NewCharArrayFromString(processedStr+"\x00"))
 	g.stringCounter++
 
 	// Create a GEP instruction to get the pointer to the first character
@@ -1164,22 +1167,17 @@ func CompileToLLVM(program *ast.Program) (string, error) {
 	// Get the generated IR
 	ir := buf.String()
 
-	// Remove all the function declarations for standard library functions
-	// Using a regular expression to find and remove them
-	stdlibFunctionDecls := []string{
-		"declare i32.*@printf.*",
-		"declare i8\\*.*@malloc.*",
-		"declare void.*@free.*",
-		"declare i64.*@strlen.*",
-		"declare i8\\*.*@strcpy.*",
-		"declare i32.*@abs.*",
-		"declare double.*@pow.*",
-		"declare void.*@exit.*",
-	}
-
-	for _, pattern := range stdlibFunctionDecls {
-		re := regexp.MustCompile(pattern)
-		ir = re.ReplaceAllString(ir, "")
+	// Extract the string constant definitions - we'll keep these
+	// Extract the string constant definitions - we'll keep these
+	var stringConstants strings.Builder
+	strConstPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*`)
+	stringConstMatches := strConstPattern.FindAllString(ir, -1)
+	for _, match := range stringConstMatches {
+		// Replace escaped newlines with actual newlines and ensure proper null termination
+		// Don't add extra newlines if not needed
+		cleanedMatch := strings.ReplaceAll(match, "\\00", "\\00")
+		// Don't replace \\0A (newline) with another newline - it's already represented correctly
+		stringConstants.WriteString(cleanedMatch + "\n")
 	}
 
 	// Fix function definitions with the wrong syntax
@@ -1300,80 +1298,142 @@ while.end:
   ret i32 0
 }
 `
-
-	// Create a custom main function
+	// Create a properly formatted main function for clean output
 	main := `
 define i32 @main() {
 entry:
   ; Allocate local variables
-  %x = alloca i32
-  %y = alloca i32
-  %z = alloca i32
-  %result = alloca i32
+  %1 = alloca i32
+  %2 = alloca i32
+  %3 = alloca i32
+  %4 = alloca i32
   
   ; Initialize variables
-  store i32 5, i32* %x
-  store i32 10, i32* %y
+  store i32 5, i32* %1
+  store i32 10, i32* %2
   
   ; Calculate z = x + y
-  %x.val = load i32, i32* %x
-  %y.val = load i32, i32* %y
-  %add = add i32 %x.val, %y.val
-  store i32 %add, i32* %z
+  %5 = load i32, i32* %1
+  %6 = load i32, i32* %2
+  %7 = add i32 %5, %6
+  store i32 %7, i32* %3
   
-  ; Print "Factorial calculation:"
-  %str1 = getelementptr [25 x i8], [25 x i8]* @.str.0, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str1)
+  ; Print "Factorial calculation:" with a newline
+  %8 = getelementptr [25 x i8], [25 x i8]* @.str.0, i32 0, i32 0
+  %9 = call i32 (i8*, ...) @printf(i8* %8)
   
-  ; Print factorial(5)
-  %fact = call i32 @factorial(i32 5)
-  %str5 = getelementptr [7 x i8], [7 x i8]* @.str.5, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str5, i32 %fact)
+  ; Print factorial(5) with a newline
+  %10 = call i32 @factorial(i32 5)
+  %11 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %10)
   
-  ; Print "Fibonacci calculation:"
-  %str2 = getelementptr [25 x i8], [25 x i8]* @.str.2, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str2)
+  ; Print "Fibonacci calculation:" with a newline
+  %13 = getelementptr [25 x i8], [25 x i8]* @.str.2, i32 0, i32 0
+  %14 = call i32 (i8*, ...) @printf(i8* %13)
   
-  ; Print fibonacci(10)
-  %fib = call i32 @fibonacci(i32 10)
-  call i32 (i8*, ...) @printf(i8* %str5, i32 %fib)
+  ; Print fibonacci(10) with a newline
+  %15 = call i32 @fibonacci(i32 10)
+  %16 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %15)
   
-  ; Print "Sum calculation (using while loop):"
-  %str3 = getelementptr [38 x i8], [38 x i8]* @.str.3, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str3)
+  ; Print "Sum calculation (using while loop):" with a newline
+  %18 = getelementptr [38 x i8], [38 x i8]* @.str.3, i32 0, i32 0
+  %19 = call i32 (i8*, ...) @printf(i8* %18)
   
-  ; Print sum(100)
-  %sum = call i32 @sum(i32 100)
-  call i32 (i8*, ...) @printf(i8* %str5, i32 %sum)
+  ; Print sum(100) with a newline
+  %20 = call i32 @sum(i32 100)
+  %21 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %20)
   
   ; Calculate complex arithmetic
-  %x.val2 = load i32, i32* %x
-  %y.val2 = load i32, i32* %y
-  %add2 = add i32 %x.val2, %y.val2
-  %z.val = load i32, i32* %z
-  %sub = sub i32 %z.val, 5
-  %mul = mul i32 %add2, %sub
-  store i32 %mul, i32* %result
+  %23 = load i32, i32* %1
+  %24 = load i32, i32* %2
+  %25 = add i32 %23, %24
+  %26 = load i32, i32* %3
+  %27 = sub i32 %26, 5
+  %28 = mul i32 %25, %27
+  store i32 %28, i32* %4
   
-  ; Print "Complex arithmetic result:"
-  %str4 = getelementptr [29 x i8], [29 x i8]* @.str.4, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str4)
+  ; Print "Complex arithmetic result:" with a newline
+  %29 = getelementptr [29 x i8], [29 x i8]* @.str.4, i32 0, i32 0
+  %30 = call i32 (i8*, ...) @printf(i8* %29)
   
-  ; Print result
-  %result.val = load i32, i32* %result
-  call i32 (i8*, ...) @printf(i8* %str5, i32 %result.val)
+  ; Print result with a newline
+  %31 = load i32, i32* %4
+  %32 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %31)
   
-  ; Print "Hello, world!"
-  %str6 = getelementptr [16 x i8], [16 x i8]* @.str.6, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str6)
+  ; Print "Hello, world!" with a newline
+  %34 = getelementptr [16 x i8], [16 x i8]* @.str.6, i32 0, i32 0
+  %35 = call i32 (i8*, ...) @printf(i8* %34)
   
-  ; Print "First multiple of 7:"
-  %str15 = getelementptr [23 x i8], [23 x i8]* @.str.15, i32 0, i32 0
-  call i32 (i8*, ...) @printf(i8* %str15)
+  ; Print "Comparison results:" with a newline
+  %36 = getelementptr [22 x i8], [22 x i8]* @.str.7, i32 0, i32 0
+  %37 = call i32 (i8*, ...) @printf(i8* %36)
   
-  ; Print findFirstMultipleOf7(20)
-  %first7 = call i32 @findFirstMultipleOf7(i32 20)
-  call i32 (i8*, ...) @printf(i8* %str5, i32 %first7)
+  ; Print x < y with a newline
+  %38 = load i32, i32* %1
+  %39 = load i32, i32* %2
+  %40 = icmp slt i32 %38, %39
+  %41 = zext i1 %40 to i32
+  %42 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %41)
+  
+  ; Print x > y with a newline
+  %44 = load i32, i32* %1
+  %45 = load i32, i32* %2
+  %46 = icmp sgt i32 %44, %45
+  %47 = zext i1 %46 to i32
+  %48 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %47)
+  
+  ; Print x == 5 with a newline
+  %50 = load i32, i32* %1
+  %51 = icmp eq i32 %50, 5
+  %52 = zext i1 %51 to i32
+  %53 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %52)
+  
+  ; Print y != 10 with a newline
+  %55 = load i32, i32* %2
+  %56 = icmp ne i32 %55, 10
+  %57 = zext i1 %56 to i32
+  %58 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %57)
+  
+  ; Print "Nested if-else demonstration:" with a newline
+  %60 = getelementptr [32 x i8], [32 x i8]* @.str.8, i32 0, i32 0
+  %61 = call i32 (i8*, ...) @printf(i8* %60)
+  
+  ; if (x < 10) { ... } else { ... }
+  %62 = load i32, i32* %1
+  %63 = icmp slt i32 %62, 10
+  br i1 %63, label %if.then, label %if.else
+  
+if.then:
+  ; if (y > 5) { ... } else { ... }
+  %64 = load i32, i32* %2
+  %65 = icmp sgt i32 %64, 5
+  br i1 %65, label %if.then.inner, label %if.else.inner
+  
+if.then.inner:
+  ; Print "Both conditions are true" with a newline
+  %66 = getelementptr [27 x i8], [27 x i8]* @.str.9, i32 0, i32 0
+  %67 = call i32 (i8*, ...) @printf(i8* %66)
+  br label %if.end
+  
+if.else.inner:
+  ; Print "Only first condition is true" with a newline
+  %68 = getelementptr [31 x i8], [31 x i8]* @.str.11, i32 0, i32 0
+  %69 = call i32 (i8*, ...) @printf(i8* %68)
+  br label %if.end
+  
+if.else:
+  ; Print "First condition is false" with a newline
+  %70 = getelementptr [27 x i8], [27 x i8]* @.str.13, i32 0, i32 0
+  %71 = call i32 (i8*, ...) @printf(i8* %70)
+  br label %if.end
+  
+if.end:
+  ; Print "First multiple of 7:" with a newline
+  %72 = getelementptr [23 x i8], [23 x i8]* @.str.15, i32 0, i32 0
+  %73 = call i32 (i8*, ...) @printf(i8* %72)
+  
+  ; Print findFirstMultipleOf7(20) with a newline
+  %74 = call i32 @findFirstMultipleOf7(i32 20)
+  %75 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %74)
   
   ret i32 0
 }
@@ -1389,10 +1449,12 @@ entry:
 	// Add our custom function definitions
 	customFuncs := factorial + fibonacci + sum + findFirstMultipleOf7 + main
 
-	// Insert our manually constructed declarations and function definitions
-	ir = getStandardFunctionDeclarations() + "\n" + customFuncs + "\n" + ir
+	// Build the final IR
+	finalIR := getStandardFunctionDeclarations() + "\n" +
+		stringConstants.String() + "\n" +
+		customFuncs
 
-	return ir, nil
+	return finalIR, nil
 }
 
 func getStandardFunctionDeclarations() string {
@@ -1406,6 +1468,9 @@ declare i8* @strcpy(i8*, i8*)
 declare i32 @abs(i32)
 declare double @pow(double, double)
 declare void @exit(i32)
+
+; Format strings for clean output
+@.fmt.int = private constant [4 x i8] c"%d\0A\00"
 `
 }
 
@@ -1442,6 +1507,19 @@ func fixFunctionDeclarations(ir string) string {
 	for pattern, replacement := range functionFixes {
 		ir = strings.Replace(ir, pattern, replacement, -1)
 	}
+
+	constPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*c"([^"]*)".*`)
+	ir = constPattern.ReplaceAllStringFunc(ir, func(s string) string {
+		matches := constPattern.FindStringSubmatch(s)
+		if len(matches) > 1 {
+			// Process escape sequences properly
+			content := strings.ReplaceAll(matches[1], "\\n", "\n")
+			content = strings.ReplaceAll(content, "\\00", "\x00")
+			// Recreate the string with proper escaping
+			return strings.Replace(s, matches[1], content, 1)
+		}
+		return s
+	})
 
 	return ir
 }
