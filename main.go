@@ -58,6 +58,7 @@ func main() {
 }
 
 // compile compiles source code to LLVM IR
+// compile compiles source code to LLVM IR
 func compile(source string) (string, error) {
 	// Lexical analysis
 	tokens, err := lexer.TokenizeFile(source)
@@ -65,17 +66,16 @@ func compile(source string) (string, error) {
 		return "", fmt.Errorf("lexer error: %v", err)
 	}
 
-	// fmt.Println("==== Tokens ====")
-	// for i, token := range tokens {
-	// 	fmt.Printf("%d: Type=%s, Literal=%q, Line=%d, Column=%d\n",
-	// 		i, token.Type, token.Literal, token.Line, token.Column)
-	// }
-	// fmt.Println("================")
+	fmt.Println("==== Tokens ====")
+	for i, token := range tokens {
+		fmt.Printf("%d: Type=%s, Literal=%q, Line=%d, Column=%d\n",
+			i, token.Type, token.Literal, token.Line, token.Column)
+	}
+	fmt.Println("================")
 
 	// Syntax analysis
 	p := parser.NewWithTokens(tokens)
 	program := p.ParseProgram()
-
 	if len(p.Errors()) != 0 {
 		return "", fmt.Errorf("parser errors: %v", p.Errors())
 	}
@@ -86,19 +86,12 @@ func compile(source string) (string, error) {
 	}
 
 	// Code generation
-	module, err := codegen.CompileToLLVM(program)
+	llvmIR, err := codegen.CompileToLLVM(program)
 	if err != nil {
 		return "", fmt.Errorf("code generation error: %v", err)
 	}
 
-	// Get the LLVM IR as a string
-	var llvmIR strings.Builder
-	_, err = module.WriteTo(&llvmIR)
-	if err != nil {
-		return "", fmt.Errorf("error writing LLVM IR: %v", err)
-	}
-
-	return llvmIR.String(), nil
+	return llvmIR, nil
 }
 
 // compileIRToExecutable compiles LLVM IR to an executable
