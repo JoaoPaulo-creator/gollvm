@@ -49,20 +49,20 @@ entry:
 	store i32 %2, i32* %z
 	%3 = bitcast i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0) to i8*
 	%4 = call i32 (i8*) (...) @printf(i8* %3, i8* getelementptr ([23 x i8], [23 x i8]* @.str.0, i64 0, i64 0))
-%5 = call i32 @factorial(i32 5)
-%6 = call i32 @factorial(i32 5)
+	%5 = call i32 @factorial(i32 5)
+	%6 = call i32 @factorial(i32 5)
 	%7 = bitcast i8* getelementptr ([4 x i8], [4 x i8]* @.str.2, i64 0, i64 0) to i8*
 	%8 = call i32 (i8*) (...) @printf(i8* %7, i32 0)
 	%9 = bitcast [4 x i8]* @.str.1 to i8*
 	%10 = call i32 (i8*) (...) @printf(i8* %9, i8* getelementptr ([23 x i8], [23 x i8]* @.str.3, i64 0, i64 0))
-%11 = call i32 @fibonacci(i32 10)
-%12 = call i32 @fibonacci(i32 10)
+	%11 = call i32 @fibonacci(i32 10)
+	%12 = call i32 @fibonacci(i32 10)
 	%13 = bitcast [4 x i8]* @.str.2 to i8*
 	%14 = call i32 (i8*) (...) @printf(i8* %13, i32 0)
 	%15 = bitcast [4 x i8]* @.str.1 to i8*
 	%16 = call i32 (i8*) (...) @printf(i8* %15, i8* getelementptr ([36 x i8], [36 x i8]* @.str.4, i64 0, i64 0))
-%17 = call i32 @sum(i32 100)
-%18 = call i32 @sum(i32 100)
+	%17 = call i32 @sum(i32 100)
+	%18 = call i32 @sum(i32 100)
 	%19 = bitcast [4 x i8]* @.str.2 to i8*
 	%20 = call i32 (i8*) (...) @printf(i8* %19, i32 0)
 	%21 = load i32, i32* %x
@@ -131,8 +131,8 @@ if.else.19:
 	%65 = call i32 (i8*) (...) @printf(i8* %64, i8* getelementptr ([25 x i8], [25 x i8]* @.str.13, i64 0, i64 0))
 	%66 = bitcast [4 x i8]* @.str.1 to i8*
 	%67 = call i32 (i8*) (...) @printf(i8* %66, i8* getelementptr ([21 x i8], [21 x i8]* @.str.15, i64 0, i64 0))
-%68 = call i32 @findFirstMultipleOf7(i32 20)
-%69 = call i32 @findFirstMultipleOf7(i32 20)
+	%68 = call i32 @findFirstMultipleOf7(i32 20)
+	%69 = call i32 @findFirstMultipleOf7(i32 20)
 	%70 = bitcast [4 x i8]* @.str.2 to i8*
 	%71 = call i32 (i8*) (...) @printf(i8* %70, i32 0)
 	br label %if.merge.18
@@ -153,7 +153,7 @@ if.merge.1:
 	%2 = load i32, i32* %n
 	%3 = load i32, i32* %n
 	%4 = sub i32 %3, 1
-%5 = call i32 @factorial(i32 %4)
+	%5 = call i32 @factorial(i32 %4)
 	%6 = mul i32 %2, 0
 	ret i32 %6
 }
@@ -180,10 +180,10 @@ if.then.4:
 if.merge.5:
 	%4 = load i32, i32* %n
 	%5 = sub i32 %4, 1
-%6 = call i32 @fibonacci(i32 %5)
+	%6 = call i32 @fibonacci(i32 %5)
 	%7 = load i32, i32* %n
 	%8 = sub i32 %7, 2
-%9 = call i32 @fibonacci(i32 %8)
+	%9 = call i32 @fibonacci(i32 %8)
 	%10 = add i32 0, 0
 	ret i32 %10
 }
