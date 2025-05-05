@@ -80,21 +80,14 @@ func (c *Context) Lookup(name string) (value.Value, bool) {
 }
 
 func declarePrintf(module *ir.Module) *ir.Func {
-	// Variadic function with return type i32, first parameter is pointer to i8
+	// Declare printf: int printf(const char*, ...)
 	paramTypes := []types.Type{types.NewPointer(types.I8)}
 	printfType := types.NewFunc(types.I32, paramTypes...)
-
-	// Create the function
 	fn := module.NewFunc("printf", printfType)
-
-	// Set the variadic flag
 	fn.Sig.Variadic = true
-
-	// Set a name for the parameter for better generated code
 	if len(fn.Params) > 0 {
 		fn.Params[0].SetName("format")
 	}
-
 	return fn
 }
 
@@ -105,7 +98,7 @@ func declareExternalFunction(module *ir.Module, name string, retType types.Type,
 	// Set parameter names for better readability
 	for i := range paramTypes {
 		if i < len(fn.Params) {
-			fn.Params[i].SetName(fmt.Sprintf("param%d", i)) // Fix: use i instead of paramType
+			fn.Params[i].SetName(fmt.Sprintf("param%d", i))
 		}
 	}
 
@@ -132,77 +125,91 @@ func declareRuntime(module *ir.Module) {
 
 // Generate generates LLVM IR from an AST
 func (g *Generator) Generate(program *ast.Program) (*ir.Module, error) {
-	// Track processed function names
-	processedFunctions := make(map[string]bool)
+	// Track defined functions to prevent duplicates
+	definedFunctions := make(map[string]*ir.Func)
 
-	// First pass: Collect all function declarations
-	for _, stmt := range program.Statements {
+	// Create main function first
+	mainFunc := g.module.NewFunc("main", types.I32)
+	mainBlock := mainFunc.NewBlock("entry")
+	g.context.currentFunction = mainFunc
+	g.context.blocks["entry"] = mainBlock
+	fmt.Fprintf(os.Stderr, "Generate: Created main function, currentFunction: %v\n", g.context.currentFunction.Name())
+
+	// Process function declarations first
+	for i, stmt := range program.Statements {
 		if varStmt, ok := stmt.(*ast.VarStatement); ok {
 			if funcLit, ok := varStmt.Value.(*ast.FunctionLiteral); ok {
-				processedFunctions[funcLit.Name] = true
-			}
-		}
-		if funcStmt, ok := stmt.(*ast.FunctionStatement); ok {
-			processedFunctions[funcStmt.Name.Value] = true
-		}
-	}
-
-	// Second pass: Generate functions
-	for i, stmt := range program.Statements {
-		if _, ok := stmt.(*ast.VarStatement); ok {
-			if funcLit, ok := stmt.(*ast.VarStatement).Value.(*ast.FunctionLiteral); ok {
-				if processedFunctions[funcLit.Name] {
-					_, err := g.generateStatement(stmt)
-					if err != nil {
-						return nil, fmt.Errorf("error processing function declaration %d: %w", i, err)
-					}
-					processedFunctions[funcLit.Name] = false // Mark as processed
+				// Check if function is already defined
+				if _, exists := definedFunctions[funcLit.Name]; exists {
+					fmt.Fprintf(os.Stderr, "Generate: Skipping duplicate function %s\n", funcLit.Name)
+					continue // Skip duplicate function definition
 				}
-			}
-		}
-		if funcStmt, ok := stmt.(*ast.FunctionStatement); ok {
-			if processedFunctions[funcStmt.Name.Value] {
-				_, err := g.generateStatement(stmt)
+				// Temporarily clear currentFunction for function declarations
+				oldFunc := g.context.currentFunction
+				g.context.currentFunction = nil
+				fmt.Fprintf(os.Stderr, "Generate: Processing function declaration %s, currentFunction: nil\n", funcLit.Name)
+				val, err := g.generateStatement(stmt)
 				if err != nil {
 					return nil, fmt.Errorf("error processing function declaration %d: %w", i, err)
 				}
-				processedFunctions[funcStmt.Name.Value] = false // Mark as processed
+				g.context.currentFunction = oldFunc
+				fmt.Fprintf(os.Stderr, "Generate: Restored currentFunction: %v\n", g.context.currentFunction.Name())
+				if fn, ok := val.(*ir.Func); ok {
+					definedFunctions[funcLit.Name] = fn
+				}
+			}
+		} else if funcStmt, ok := stmt.(*ast.FunctionStatement); ok {
+			// Check if function is already defined
+			if _, exists := definedFunctions[funcStmt.Name.Value]; exists {
+				fmt.Fprintf(os.Stderr, "Generate: Skipping duplicate function %s\n", funcStmt.Name.Value)
+				continue // Skip duplicate function definition
+			}
+			// Temporarily clear currentFunction for function declarations
+			oldFunc := g.context.currentFunction
+			g.context.currentFunction = nil
+			fmt.Fprintf(os.Stderr, "Generate: Processing function declaration %s, currentFunction: nil\n", funcStmt.Name.Value)
+			val, err := g.generateStatement(stmt)
+			if err != nil {
+				return nil, fmt.Errorf("error processing function declaration %d: %w", i, err)
+			}
+			g.context.currentFunction = oldFunc
+			fmt.Fprintf(os.Stderr, "Generate: Restored currentFunction: %v\n", g.context.currentFunction.Name())
+			if fn, ok := val.(*ir.Func); ok {
+				definedFunctions[funcStmt.Name.Value] = fn
 			}
 		}
 	}
 
-	// Create main function
-	mainFunc := g.module.NewFunc("main", types.NewFunc(types.I32))
-	mainBlock := mainFunc.NewBlock("entry")
-	g.context.currentFunction = mainFunc
-
-	// Process non-function declarations in main
+	// Process non-function statements in main
 	for i, stmt := range program.Statements {
-		// Skip functions, which we've already processed
-		if _, ok := stmt.(*ast.VarStatement); ok {
-			if _, ok := stmt.(*ast.VarStatement).Value.(*ast.FunctionLiteral); ok {
+		// Skip function declarations
+		if varStmt, ok := stmt.(*ast.VarStatement); ok {
+			if _, ok := varStmt.Value.(*ast.FunctionLiteral); ok {
+				fmt.Fprintf(os.Stderr, "Generate: Skipping function variable %s in main processing\n", varStmt.Name.Value)
 				continue
 			}
 		}
 		if _, ok := stmt.(*ast.FunctionStatement); ok {
+			fmt.Fprintf(os.Stderr, "Generate: Skipping function statement in main processing\n")
 			continue
 		}
 
+		fmt.Fprintf(os.Stderr, "Generate: Processing statement %d, currentFunction: %v\n", i, g.context.currentFunction.Name())
 		_, err := g.generateStatement(stmt)
 		if err != nil {
 			return nil, fmt.Errorf("error processing statement %d: %w", i, err)
 		}
 	}
+
 	// Add a terminator to the main block if needed
 	if mainBlock.Term == nil {
 		mainBlock.NewRet(constant.NewInt(types.I32, 0))
 	}
 
-	// Check and fix all blocks in all functions
+	// Ensure all blocks have terminators
 	for _, fn := range g.module.Funcs {
 		for _, block := range fn.Blocks {
 			if block.Term == nil {
-				// Add appropriate terminator based on function return type
 				if fn.Sig.RetType.Equal(types.Void) {
 					block.NewRet(nil)
 				} else {
@@ -216,7 +223,6 @@ func (g *Generator) Generate(program *ast.Program) (*ir.Module, error) {
 }
 
 // generateStatement generates code for a statement
-// generateStatement generates code for a statement with improved error handling
 func (g *Generator) generateStatement(stmt ast.Statement) (value.Value, error) {
 	if stmt == nil {
 		return nil, fmt.Errorf("nil statement")
@@ -289,11 +295,11 @@ func (g *Generator) generateFunctionStatement(stmt *ast.FunctionStatement) (valu
 }
 
 func (g *Generator) generateForStatement(stmt *ast.ForStatement) (value.Value, error) {
-	// Generate code for for-loop construct
-	// This is a simplified example - you'll need to implement the full logic
-
 	// Get current function
 	fn := g.context.currentFunction
+	if fn == nil {
+		return nil, fmt.Errorf("no current function for for statement")
+	}
 
 	// Create blocks for the for loop
 	initBlock := fn.NewBlock(fmt.Sprintf("for.init.%d", g.blockCounter))
@@ -352,7 +358,10 @@ func (g *Generator) generateForStatement(stmt *ast.ForStatement) (value.Value, e
 		return nil, err
 	}
 
-	bodyBlock.NewBr(updateBlock)
+	// Add branch to update block if no terminator
+	if bodyBlock.Term == nil {
+		bodyBlock.NewBr(updateBlock)
+	}
 
 	// Generate update
 	if stmt.Update != nil {
@@ -362,19 +371,17 @@ func (g *Generator) generateForStatement(stmt *ast.ForStatement) (value.Value, e
 		}
 	}
 
-	updateBlock.NewBr(condBlock)
+	// Add branch to condition block if no terminator
+	if updateBlock.Term == nil {
+		updateBlock.NewBr(condBlock)
+	}
 
 	return nil, nil
 }
 
 func (g *Generator) generateImportStatement(stmt *ast.ImportStatement) (value.Value, error) {
-	// Handle import statements - this will depend on how your language handles imports
-	// For now, simply register the imported module name
+	// Handle import statements
 	fmt.Printf("Importing module: %s\n", stmt.Path.Value)
-
-	// In a real implementation, you'd need to load and process the imported module
-	// This might involve reading files, resolving dependencies, etc.
-
 	return nil, nil
 }
 
@@ -389,16 +396,12 @@ func (g *Generator) ensureType(val value.Value, expectedType types.Type) value.V
 	// Handle common type conversions
 	switch {
 	case types.IsInt(val.Type()) && types.IsInt(expectedType):
-		// Bitcast between integer types
 		return currentBlock.NewBitCast(val, expectedType)
 	case types.IsPointer(val.Type()) && types.IsInt(expectedType):
-		// Convert pointer to integer
 		return currentBlock.NewPtrToInt(val, expectedType)
 	case types.IsInt(val.Type()) && types.IsPointer(expectedType):
-		// Convert integer to pointer
 		return currentBlock.NewIntToPtr(val, expectedType)
 	default:
-		// Log warning for unsupported type conversion
 		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type conversion from %v to %v\n",
 			val.Type(), expectedType)
 		return val
@@ -428,14 +431,12 @@ func (g *Generator) debugExpression(expr ast.Expression) {
 		fmt.Fprintf(os.Stderr, "Identifier: %s\n", e.Value)
 	case *ast.IntegerLiteral:
 		fmt.Fprintf(os.Stderr, "Integer Literal: %d\n", e.Value)
-		// Add more cases as needed
 	}
 }
 
 // generateExpression generates code for an expression
 func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error) {
 	g.debugExpression(expr)
-	// Check for nil expression
 	if expr == nil {
 		return nil, fmt.Errorf("nil expression")
 	}
@@ -460,39 +461,90 @@ func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error)
 	case *ast.AssignmentExpression:
 		return g.generateAssignmentExpression(expr)
 	case *ast.EmptyExpression:
-		// Just return a dummy value for empty expressions
 		return constant.NewInt(types.I32, 0), nil
 	default:
 		return nil, fmt.Errorf("unknown expression type: %T", expr)
 	}
 }
 
+// CompileToLLVM generates LLVM IR from an AST program
+func CompileToLLVM(program *ast.Program) (string, error) {
+	generator := New()
+	module, err := generator.Generate(program)
+	if err != nil {
+		return "", err
+	}
+
+	var buf strings.Builder
+	_, err = module.WriteTo(&buf)
+	if err != nil {
+		return "", err
+	}
+
+	ir := buf.String()
+
+	// Apply fixes
+	ir = fixPrintfDeclaration(ir)
+	ir = fixExternalFunctionDeclarations(ir)
+	ir = fixFunctionDeclarations(ir)
+	ir = fixFunctionPointerUsage(ir)
+	ir = fixFunctionTypeUsage(ir)
+	ir = removeDuplicateFunctionDefinitions(ir)
+
+	// Add standard format strings
+	formatStrings := `
+; Standard format strings
+@.fmt.int = private constant [4 x i8] c"%d\0A\00"
+@.fmt.str = private constant [4 x i8] c"%s\0A\00"
+@.fmt.float = private constant [4 x i8] c"%f\0A\00"
+@.fmt.bool = private constant [4 x i8] c"%d\0A\00"
+`
+	ir = ir + "\n" + formatStrings
+	return ir, nil
+}
+
 func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression) (value.Value, error) {
-	// Generate the right-hand side value
 	val, err := g.generateExpression(expr.Value)
 	if err != nil {
 		return nil, err
 	}
 
-	// Look up the variable to assign to
 	varVal, ok := g.context.Lookup(expr.Name.Value)
 	if !ok {
 		return nil, fmt.Errorf("undefined variable for assignment: %s", expr.Name.Value)
 	}
 
-	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
-
-	// Store the value in the variable
+	// Use the main function's entry block if outside a function
+	currentBlock := g.getCurrentBlock()
 	currentBlock.NewStore(val, varVal)
 
-	// Return the value (assignments are expressions in this language)
 	return val, nil
+}
+
+// getCurrentBlock retrieves the current block, defaulting to main's entry block if necessary
+func (g *Generator) getCurrentBlock() *ir.Block {
+	if g.context.currentFunction != nil && len(g.context.currentFunction.Blocks) > 0 {
+		return g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	}
+	// Fallback to main function's entry block
+	for _, fn := range g.module.Funcs {
+		if fn.Name() == "main" && len(fn.Blocks) > 0 {
+			fmt.Fprintf(os.Stderr, "getCurrentBlock: Falling back to main's entry block\n")
+			return fn.Blocks[0]
+		}
+	}
+	// Create a new block in main if none exists
+	mainFunc := g.module.NewFunc("main", types.I32)
+	block := mainFunc.NewBlock("entry")
+	g.context.currentFunction = mainFunc
+	g.context.blocks["entry"] = block
+	fmt.Fprintf(os.Stderr, "getCurrentBlock: Created new main function and entry block\n")
+	return block
 }
 
 // generateVarStatement generates code for a var statement
 func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, error) {
-	fmt.Fprintf(os.Stderr, "Generating var statement: %s\n", stmt.Name.Value)
+	fmt.Fprintf(os.Stderr, "Generating var statement: %s, currentFunction: %v\n", stmt.Name.Value, g.context.currentFunction)
 
 	// Generate the value first
 	val, err := g.generateExpression(stmt.Value)
@@ -507,13 +559,13 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 
 	// Handle function pointers explicitly
 	if funcVal, ok := val.(*ir.Func); ok {
-		// For function values, use a pointer to the function type
-		allocType = types.NewPointer(funcVal.Type())
+		// Use a pointer to the function type
+		allocType = types.NewPointer(funcVal.Sig)
 		fmt.Fprintf(os.Stderr, "Function detected, using function pointer type: %v\n", allocType)
 	} else if ptrType, ok := val.Type().(*types.PointerType); ok {
-		if _, isFunc := ptrType.ElemType.(*types.FuncType); isFunc {
-			// For function pointers, use the pointer type directly
-			allocType = ptrType
+		if funcType, isFunc := ptrType.ElemType.(*types.FuncType); isFunc {
+			// For function pointers, use a pointer to the function type
+			allocType = types.NewPointer(funcType)
 			fmt.Fprintf(os.Stderr, "Function pointer detected, using type: %v\n", allocType)
 		} else {
 			// For regular pointers, use the pointer type
@@ -528,16 +580,19 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 
 	// Global variable handling
 	if g.context.currentFunction == nil {
+		fmt.Fprintf(os.Stderr, "Handling global variable: %s\n", stmt.Name.Value)
 		// Create global variable with proper initialization
 		global := g.module.NewGlobal(stmt.Name.Value, allocType)
 
 		// Try to use constant initialization if possible
 		if constVal, ok := val.(constant.Constant); ok {
 			global.Init = constVal
+			fmt.Fprintf(os.Stderr, "Global %s initialized with constant: %v\n", stmt.Name.Value, constVal)
 		} else {
 			global.Init = constant.NewZeroInitializer(allocType)
+			fmt.Fprintf(os.Stderr, "Global %s initialized with zero initializer\n", stmt.Name.Value)
 
-			// Create a global initializer function if needed
+			// Create or use global initializer function
 			var initFunc *ir.Func
 			for _, fn := range g.module.Funcs {
 				if fn.Name() == "global_init" {
@@ -546,13 +601,15 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 				}
 			}
 			if initFunc == nil {
-				initFunc = g.module.NewFunc("global_init", types.NewFunc(types.Void))
+				initFunc = g.module.NewFunc("global_init", types.Void)
 				initBlock := initFunc.NewBlock("entry")
 				initBlock.NewRet(nil)
+				// Call global_init from main
 				for _, fn := range g.module.Funcs {
 					if fn.Name() == "main" {
 						mainEntry := fn.Blocks[0]
 						mainEntry.Insts = append([]ir.Instruction{mainEntry.NewCall(initFunc)}, mainEntry.Insts...)
+						fmt.Fprintf(os.Stderr, "Added global_init call to main\n")
 						break
 					}
 				}
@@ -565,6 +622,7 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 			} else {
 				entryBlock.Insts = append(entryBlock.Insts, storeInst)
 			}
+			fmt.Fprintf(os.Stderr, "Stored global %s in global_init\n", stmt.Name.Value)
 		}
 
 		g.context.namedValues[stmt.Name.Value] = global
@@ -572,10 +630,7 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 	}
 
 	// Local variable handling
-	if g.context.currentFunction == nil {
-		return nil, fmt.Errorf("cannot create local variable outside of a function")
-	}
-
+	fmt.Fprintf(os.Stderr, "Handling local variable: %s\n", stmt.Name.Value)
 	// Get the entry block
 	entryBlock := g.context.currentFunction.Blocks[0]
 
@@ -589,7 +644,7 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 	}
 
 	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	currentBlock := g.getCurrentBlock()
 
 	// Store the value with proper casting if needed
 	storeVal := val
@@ -617,7 +672,7 @@ func (g *Generator) generateReturnStatement(stmt *ast.ReturnStatement) (value.Va
 	}
 
 	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	currentBlock := g.getCurrentBlock()
 
 	// Generate return instruction
 	currentBlock.NewRet(val)
@@ -664,9 +719,12 @@ func (g *Generator) generateBlockStatement(stmt *ast.BlockStatement) (value.Valu
 func (g *Generator) generateWhileStatement(stmt *ast.WhileStatement) (value.Value, error) {
 	// Get current function
 	fn := g.context.currentFunction
+	if fn == nil {
+		return nil, fmt.Errorf("no current function for while statement")
+	}
 
 	// Get the current block BEFORE creating new blocks
-	currentBlock := fn.Blocks[len(fn.Blocks)-1]
+	currentBlock := g.getCurrentBlock()
 
 	// Create blocks for the while loop
 	condBlock := fn.NewBlock(fmt.Sprintf("while.cond.%d", g.blockCounter))
@@ -703,10 +761,13 @@ func (g *Generator) generateWhileStatement(stmt *ast.WhileStatement) (value.Valu
 	condBlock.NewCondBr(condBool, bodyBlock, endBlock)
 
 	// Generate loop body
-	g.generateStatement(stmt.Body)
+	_, err = g.generateStatement(stmt.Body)
+	if err != nil {
+		return nil, err
+	}
 
 	// Add back edge to condition block if no terminator exists
-	if len(bodyBlock.Insts) == 0 || bodyBlock.Term == nil {
+	if bodyBlock.Term == nil {
 		bodyBlock.NewBr(condBlock)
 	}
 
@@ -717,8 +778,9 @@ func (g *Generator) generateWhileStatement(stmt *ast.WhileStatement) (value.Valu
 func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, error) {
 	// Verify we have a current function
 	if g.context.currentFunction == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: No current function when generating if statement\n")
-		return constant.NewInt(types.I32, 0), nil
+		fmt.Fprintf(os.Stderr, "WARNING: No current function when generating if statement, using main\n")
+		g.context.currentFunction = g.module.NewFunc("main", types.I32)
+		g.context.currentFunction.NewBlock("entry")
 	}
 
 	fn := g.context.currentFunction
@@ -732,20 +794,11 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 
 	// Verify we have at least one block in the function
 	if len(fn.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "ERROR: Function has no blocks when generating if statement\n")
-		// Create an entry block as a fallback
-		entryBlock := fn.NewBlock("entry")
-		g.context.blocks["entry"] = entryBlock
+		return nil, fmt.Errorf("function has no blocks for if statement")
 	}
 
 	// Get current block safely
-	var currentBlock *ir.Block
-	if len(fn.Blocks) > 0 {
-		currentBlock = fn.Blocks[len(fn.Blocks)-1]
-	} else {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to get current block for if statement\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
+	currentBlock := g.getCurrentBlock()
 
 	// Create blocks for if statement
 	thenBlock := fn.NewBlock(fmt.Sprintf("if.then.%d", g.blockCounter))
@@ -763,7 +816,6 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 	}
 
 	// Generate conditional branch
-	// Convert to boolean if needed
 	var condBool value.Value
 	if condVal.Type().Equal(types.I1) {
 		condBool = condVal
@@ -785,7 +837,7 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 	}
 
 	// Add branch to merge block if there isn't a terminator
-	if len(thenBlock.Insts) == 0 || thenBlock.Term == nil {
+	if thenBlock.Term == nil {
 		thenBlock.NewBr(mergeBlock)
 	}
 
@@ -798,42 +850,8 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 		}
 
 		// Add branch to merge block if there isn't a terminator
-		if len(elseBlock.Insts) == 0 || elseBlock.Term == nil {
+		if elseBlock.Term == nil {
 			elseBlock.NewBr(mergeBlock)
-		}
-	}
-
-	// This is key: we need to make sure the merge block has a terminator
-	// For now, we'll add a default return instruction
-	// We'll check and fix this later in the Generate function
-	if mergeBlock.Term == nil {
-		// Add a default branch to the next block if one exists
-		if len(fn.Blocks) > 0 && fn.Blocks[len(fn.Blocks)-1] != mergeBlock {
-			nextBlockIndex := -1
-			for i, block := range fn.Blocks {
-				if block == mergeBlock && i < len(fn.Blocks)-1 {
-					nextBlockIndex = i + 1
-					break
-				}
-			}
-
-			if nextBlockIndex != -1 {
-				mergeBlock.NewBr(fn.Blocks[nextBlockIndex])
-			} else {
-				// If no next block, return a default value
-				if fn.Sig.RetType.Equal(types.Void) {
-					mergeBlock.NewRet(nil)
-				} else {
-					mergeBlock.NewRet(constant.NewInt(types.I32, 0))
-				}
-			}
-		} else {
-			// Add a default return if no next block
-			if fn.Sig.RetType.Equal(types.Void) {
-				mergeBlock.NewRet(nil)
-			} else {
-				mergeBlock.NewRet(constant.NewInt(types.I32, 0))
-			}
 		}
 	}
 
@@ -842,11 +860,10 @@ func (g *Generator) generateIfStatement(stmt *ast.IfStatement) (value.Value, err
 
 // generatePrintStatement generates code for a print statement
 func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Value, error) {
-	// Check if we have a current function
-	if g.context.currentFunction == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: No current function when generating print statement\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
+	// Get current block, falling back to main if necessary
+	currentBlock := g.getCurrentBlock()
+	fmt.Fprintf(os.Stderr, "Generating print statement, currentFunction: %v, block: %s\n",
+		g.context.currentFunction.Name(), currentBlock.Name())
 
 	// Generate the value to print
 	val, err := g.generateExpression(stmt.Value)
@@ -855,44 +872,69 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 		return nil, err
 	}
 
-	// Get current block safely
-	var currentBlock *ir.Block
-	if len(g.context.currentFunction.Blocks) > 0 {
-		currentBlock = g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	// Handle function call expressions explicitly
+	var printVal value.Value
+	if callExpr, ok := stmt.Value.(*ast.CallExpression); ok {
+		// Generate the call expression to get the return value
+		callResult, err := g.generateCallExpression(callExpr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to generate call expression for print: %v\n", err)
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "Call expression result type: %v\n", callResult.Type())
+		if callResult.Type() == nil || callResult.Type().Equal(types.Void) {
+			fmt.Fprintf(os.Stderr, "WARNING: Call expression returned void or nil type, defaulting to i32 0\n")
+			printVal = constant.NewInt(types.I32, 0)
+		} else if _, isFunc := callResult.Type().(*types.FuncType); isFunc {
+			fmt.Fprintf(os.Stderr, "WARNING: Call expression returned function type, defaulting to i32 0\n")
+			printVal = constant.NewInt(types.I32, 0)
+		} else {
+			printVal = callResult
+		}
 	} else {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to get current block for print statement\n")
-		return constant.NewInt(types.I32, 0), nil
+		fmt.Fprintf(os.Stderr, "Non-call expression type: %v\n", val.Type())
+		printVal = val
 	}
 
-	// Depending on the type, we need different format strings for printf
+	// Depending on the type, select the appropriate format string
 	var formatStr string
-	var printVal value.Value
-	var formatType types.Type
 
-	switch valType := val.Type().(type) {
+	fmt.Fprintf(os.Stderr, "Print value type: %v\n", printVal.Type())
+
+	switch valType := printVal.Type().(type) {
 	case *types.IntType:
 		formatStr = "%d\n"
-		formatType = types.NewPointer(types.NewArray(4, types.I8))
-		printVal = val
 	case *types.FloatType:
 		formatStr = "%f\n"
-		formatType = types.NewPointer(types.NewArray(4, types.I8))
-		printVal = val
 	case *types.PointerType:
-		// Check if it's a string
 		if valType.ElemType != nil && valType.ElemType.Equal(types.I8) {
 			formatStr = "%s\n"
-			formatType = types.NewPointer(types.NewArray(4, types.I8))
-			printVal = val
+		} else if _, isFunc := valType.ElemType.(*types.FuncType); isFunc {
+			fmt.Fprintf(os.Stderr, "WARNING: Attempting to print function pointer type %v, converting to i32\n", valType)
+			formatStr = "%d\n"
+			// Convert function pointer to integer
+			printVal = currentBlock.NewPtrToInt(printVal, types.I32)
 		} else {
-			formatStr = "%p\n"
-			formatType = types.NewPointer(types.NewArray(4, types.I8))
-			printVal = val
+			fmt.Fprintf(os.Stderr, "WARNING: Attempting to print pointer type %v, converting to i32\n", valType)
+			formatStr = "%d\n"
+			// Convert pointer to integer if needed
+			if !types.IsInt(printVal.Type()) {
+				printVal = currentBlock.NewPtrToInt(printVal, types.I32)
+			}
+		}
+	case *types.FuncType:
+		fmt.Fprintf(os.Stderr, "WARNING: Attempting to print function type %v, converting to i32\n", valType)
+		formatStr = "%d\n"
+		// Convert function type to integer
+		if ptrType, ok := printVal.(value.Value); ok && types.IsPointer(ptrType.Type()) {
+			printVal = currentBlock.NewPtrToInt(ptrType, types.I32)
+		} else {
+			// Fallback to zero
+			printVal = constant.NewInt(types.I32, 0)
 		}
 	default:
-		formatStr = "%s\n"
-		formatType = types.NewPointer(types.NewArray(4, types.I8))
-		printVal = val
+		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type %v for print, defaulting to integer\n", printVal.Type())
+		formatStr = "%d\n"
 	}
 
 	// Create format string constant
@@ -910,14 +952,28 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 	}
 
 	if printfFn == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: printf function not found\n")
-		return constant.NewInt(types.I32, 0), nil
+		return nil, fmt.Errorf("printf function not found")
 	}
 
 	// Cast format string constant to the expected pointer type
-	formatStrPtr := currentBlock.NewBitCast(formatStrConst, formatType)
+	formatStrPtr := currentBlock.NewBitCast(formatStrConst, types.NewPointer(types.I8))
 
-	// Create the printf call with appropriate parameters
+	// Ensure printVal is compatible with printf
+	var printArg value.Value
+	if types.IsPointer(printVal.Type()) && printVal.Type().(*types.PointerType).ElemType.Equal(types.I8) {
+		// String pointers are passed directly
+		printArg = printVal
+	} else if types.IsInt(printVal.Type()) || types.IsFloat(printVal.Type()) {
+		// Integers and floats are passed directly
+		printArg = printVal
+	} else {
+		// Allocate and store the value to create a pointer
+		alloca := currentBlock.NewAlloca(printVal.Type())
+		currentBlock.NewStore(printVal, alloca)
+		printArg = alloca
+	}
+
+	// Create the printf call
 	var result value.Value
 	func() {
 		defer func() {
@@ -926,18 +982,6 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 				result = nil
 			}
 		}()
-
-		// Ensure printVal is a pointer if needed
-		var printArg value.Value
-		if types.IsPointer(printVal.Type()) {
-			printArg = printVal
-		} else {
-			// Create an alloca to store the value
-			alloca := currentBlock.NewAlloca(val.Type())
-			currentBlock.NewStore(val, alloca)
-			printArg = alloca
-		}
-
 		result = currentBlock.NewCall(printfFn, formatStrPtr, printArg)
 	}()
 
@@ -951,36 +995,25 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 
 // getStringConstant gets or creates a string constant
 func (g *Generator) getStringConstant(str string) value.Value {
-	// Check if the string already exists
 	if global, ok := g.context.stringConstants[str]; ok {
 		return global
 	}
 
-	// Process escape sequences in the string
 	processedStr := str
-
-	// Create a properly null-terminated string constant
-	// Only add null terminator if it doesn't already have one
 	if !strings.HasSuffix(processedStr, "\x00") {
 		processedStr = processedStr + "\x00"
 	}
 
-	// Calculate the exact length including the null terminator
 	arrayLength := uint64(len(processedStr))
-
-	// Create a string constant
 	strType := types.NewArray(arrayLength, types.I8)
 	strConst := g.module.NewGlobalDef(fmt.Sprintf(".str.%d", g.stringCounter),
 		constant.NewCharArrayFromString(processedStr))
 	g.stringCounter++
 
-	// Create a GEP instruction to get the pointer to the first character
 	zero := constant.NewInt(types.I64, 0)
 	strPtr := constant.NewGetElementPtr(strType, strConst, zero, zero)
 
-	// Store the string in the context
 	g.context.stringConstants[str] = strConst
-
 	return strPtr
 }
 
@@ -1019,37 +1052,18 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 	if ptr, ok := val.Type().(*types.PointerType); ok {
 		fmt.Fprintf(os.Stderr, "Pointer element type: %v\n", ptr.ElemType)
 
-		if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
-			fmt.Fprintf(os.Stderr, "WARNING: Attempting to load value outside of a function or in a function with no blocks\n")
-			return constant.NewInt(types.I32, 0), nil
+		// For global variables, return the pointer directly during initialization
+		if g.context.currentFunction == nil {
+			fmt.Fprintf(os.Stderr, "Returning global variable pointer: %s\n", expr.Value)
+			return val, nil
 		}
 
-		currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+		currentBlock := g.getCurrentBlock()
 
 		// Handle function pointer types
 		if _, ok := ptr.ElemType.(*types.FuncType); ok {
 			fmt.Fprintf(os.Stderr, "Function pointer detected\n")
 			return currentBlock.NewLoad(ptr, val), nil
-		}
-
-		// Handle generic pointer (i8*) that might hold a function pointer
-		if ptr.ElemType.Equal(types.I8) {
-			isFuncPtr := false
-			for _, fname := range []string{"factorial", "fibonacci", "sum", "findFirstMultipleOf7"} {
-				if expr.Value == fname {
-					isFuncPtr = true
-					break
-				}
-			}
-
-			if isFuncPtr {
-				fmt.Fprintf(os.Stderr, "Potential function pointer stored in i8* detected\n")
-				// Assume function type: i32(i32)
-				funcType := types.NewFunc(types.I32, []types.Type{types.I32}...)
-				funcPtrType := types.NewPointer(funcType)
-				castedPtr := currentBlock.NewBitCast(val, funcPtrType)
-				return currentBlock.NewLoad(funcPtrType, castedPtr), nil
-			}
 		}
 
 		// Load regular value
@@ -1059,63 +1073,51 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 	return val, nil
 }
 
-// 2. Fix for generateCallExpression function (around line 1371)
 func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Value, error) {
-	// Generate code for the function
 	function, err := g.generateExpression(expr.Function)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if function is nil
 	if function == nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Function expression evaluated to nil in call expression\n")
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Make sure the function is callable
 	var callableFunction value.Value
-	var returnType types.Type = types.I32 // Default return type
+	var returnType types.Type = types.I32
 
-	// Determine callability and return type
+	fmt.Fprintf(os.Stderr, "Function type: %v\n", function.Type())
+
 	switch fn := function.(type) {
 	case *ir.Func:
-		// Direct function reference
-		callableFunction = fn
+		fmt.Fprintf(os.Stderr, "Direct function call: %s, signature: %v, return type: %v\n", fn.Name(), fn.Sig, fn.Sig.RetType)
 		returnType = fn.Sig.RetType
-	default:
-		// Check for function pointer types
-		funcType, ok := function.Type().(*types.PointerType)
-		if ok {
-			funcElemType, ok := funcType.ElemType.(*types.FuncType)
-			if ok {
-				// Verify we have a current function with at least one block
-				if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
-					fmt.Fprintf(os.Stderr, "ERROR: No current function or blocks when generating call expression\n")
-					return constant.NewInt(types.I32, 0), nil
-				}
-
-				// We don't need to create a current block or function pointer type since
-				// the function is already loaded by generateIdentifier
-				callableFunction = function
-				returnType = funcElemType.RetType
+		callableFunction = fn
+	case value.Value:
+		if ptrType, ok := fn.Type().(*types.PointerType); ok {
+			if funcType, ok := ptrType.ElemType.(*types.FuncType); ok {
+				fmt.Fprintf(os.Stderr, "Function pointer call, return type: %v\n", funcType.RetType)
+				returnType = funcType.RetType
+				callableFunction = fn
 			} else {
-				fmt.Fprintf(os.Stderr, "ERROR: Attempted to call a non-function pointer: %v\n", funcType.ElemType)
+				fmt.Fprintf(os.Stderr, "ERROR: Attempted to call a non-function pointer: %v\n", ptrType.ElemType)
 				return constant.NewInt(types.I32, 0), nil
 			}
 		} else {
-			// Not a valid function type
-			fmt.Fprintf(os.Stderr, "ERROR: Cannot call value of type %T (type %v)\n", fn, function.Type())
+			fmt.Fprintf(os.Stderr, "ERROR: Cannot call value of type %v\n", fn.Type())
 			return constant.NewInt(types.I32, 0), nil
 		}
+	default:
+		fmt.Fprintf(os.Stderr, "ERROR: Cannot call value of type %T\n", fn)
+		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Generate code for the arguments
 	args := make([]value.Value, len(expr.Arguments))
 	for i, arg := range expr.Arguments {
 		if arg == nil {
 			fmt.Fprintf(os.Stderr, "WARNING: Nil argument at position %d in function call\n", i)
-			args[i] = constant.NewInt(types.I32, 0) // Default value
+			args[i] = constant.NewInt(types.I32, 0)
 			continue
 		}
 
@@ -1127,23 +1129,15 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 
 		if argVal == nil {
 			fmt.Fprintf(os.Stderr, "WARNING: Argument expression %d evaluated to nil\n", i)
-			args[i] = constant.NewInt(types.I32, 0) // Default value
+			args[i] = constant.NewInt(types.I32, 0)
 			continue
 		}
 
 		args[i] = argVal
 	}
 
-	// Verify we have a current function with at least one block
-	if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "ERROR: No current function or blocks when generating call expression\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
+	currentBlock := g.getCurrentBlock()
 
-	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
-
-	// Generate the call with more robust error checking
 	var callResult value.Value
 	func() {
 		defer func() {
@@ -1152,8 +1146,6 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 				callResult = nil
 			}
 		}()
-
-		// Perform the call
 		callResult = currentBlock.NewCall(callableFunction, args...)
 	}()
 
@@ -1162,9 +1154,17 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// If we have a specific return type that's not void, return the call result
-	// Otherwise, return a default value
+	fmt.Fprintf(os.Stderr, "Call result type: %v\n", callResult.Type())
+
 	if returnType != nil && !returnType.Equal(types.Void) {
+		if _, isFunc := callResult.Type().(*types.FuncType); isFunc {
+			fmt.Fprintf(os.Stderr, "ERROR: Call result is a function type %v, defaulting to i32 0\n", callResult.Type())
+			return constant.NewInt(types.I32, 0), nil
+		}
+		if !callResult.Type().Equal(returnType) {
+			fmt.Fprintf(os.Stderr, "WARNING: Call result type %v does not match expected return type %v\n", callResult.Type(), returnType)
+			callResult = g.ensureType(callResult, returnType)
+		}
 		return callResult, nil
 	}
 
@@ -1191,19 +1191,15 @@ func (g *Generator) generateBooleanLiteral(expr *ast.BooleanLiteral) (value.Valu
 
 // generatePrefixExpression generates code for a prefix expression
 func (g *Generator) generatePrefixExpression(expr *ast.PrefixExpression) (value.Value, error) {
-	// Generate code for the right expression
 	right, err := g.generateExpression(expr.Right)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	currentBlock := g.getCurrentBlock()
 
-	// Apply the operator
 	switch expr.Operator {
 	case "!":
-		// Boolean not
 		var boolVal value.Value
 		if right.Type().Equal(types.I1) {
 			boolVal = right
@@ -1216,7 +1212,6 @@ func (g *Generator) generatePrefixExpression(expr *ast.PrefixExpression) (value.
 		}
 		return currentBlock.NewXor(boolVal, constant.NewInt(types.I1, 1)), nil
 	case "-":
-		// Negate
 		intType, ok := right.Type().(*types.IntType)
 		if !ok {
 			return nil, fmt.Errorf("expected int type for - operator, got %T", right.Type())
@@ -1228,15 +1223,12 @@ func (g *Generator) generatePrefixExpression(expr *ast.PrefixExpression) (value.
 }
 
 // generateInfixExpression generates code for an infix expression
-// generateInfixExpression generates code for an infix expression
 func (g *Generator) generateInfixExpression(expr *ast.InfixExpression) (value.Value, error) {
-	// Generate code for the left and right expressions
 	left, err := g.generateExpression(expr.Left)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if left is nil to avoid panic
 	if left == nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Left expression evaluated to nil in infix expression\n")
 		return constant.NewInt(types.I32, 0), nil
@@ -1247,23 +1239,13 @@ func (g *Generator) generateInfixExpression(expr *ast.InfixExpression) (value.Va
 		return nil, err
 	}
 
-	// Check if right is nil to avoid panic
 	if right == nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Right expression evaluated to nil in infix expression\n")
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Verify we have a current function and at least one block
-	if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "WARNING: No current function or blocks when generating infix expression\n")
-		// Return a default value for the operation
-		return constant.NewInt(types.I32, 0), nil
-	}
+	currentBlock := g.getCurrentBlock()
 
-	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
-
-	// Apply the operator
 	switch expr.Operator {
 	case "+":
 		return currentBlock.NewAdd(left, right), nil
@@ -1304,6 +1286,7 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	// Check for existing function
 	for _, existingFunc := range g.module.Funcs {
 		if existingFunc.Name() == expr.Name {
+			fmt.Fprintf(os.Stderr, "Reusing existing function: %s\n", expr.Name)
 			return existingFunc, nil
 		}
 	}
@@ -1316,7 +1299,7 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	}
 
 	// Determine return type
-	var retType types.Type = types.I32
+	var retType types.Type
 	switch expr.ReturnType {
 	case "void":
 		retType = types.Void
@@ -1324,19 +1307,24 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		retType = types.I1
 	case "int", "":
 		retType = types.I32
+	default:
+		fmt.Fprintf(os.Stderr, "WARNING: Unknown return type %s, defaulting to i32\n", expr.ReturnType)
+		retType = types.I32
 	}
 
 	// Create parameter types
 	paramTypes := make([]types.Type, len(expr.Parameters))
 	for i := range paramTypes {
-		paramTypes[i] = types.I32
+		paramTypes[i] = types.I32 // Default to i32 for parameters
 	}
 
 	// Create function type
 	funcType := types.NewFunc(retType, paramTypes...)
+	fmt.Fprintf(os.Stderr, "Function type created: %v\n", funcType)
 
 	// Create function
 	fn := g.module.NewFunc(funcName, funcType)
+	fmt.Fprintf(os.Stderr, "Created function %s with signature: %v\n", funcName, fn.Sig)
 
 	// Save current context
 	oldContext := g.context
@@ -1381,6 +1369,11 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		lastBlock := fn.Blocks[len(fn.Blocks)-1]
 		if lastBlock.Term == nil {
 			if bodyVal != nil && !retType.Equal(types.Void) {
+				// Ensure bodyVal is not a function type
+				if _, isFunc := bodyVal.Type().(*types.FuncType); isFunc {
+					fmt.Fprintf(os.Stderr, "WARNING: Function body returned function type, defaulting to i32 0\n")
+					bodyVal = constant.NewInt(types.I32, 0)
+				}
 				lastBlock.NewRet(bodyVal)
 			} else {
 				switch retType {
@@ -1412,409 +1405,261 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 
 // WriteToFile writes the generated LLVM IR to a file
 func (g *Generator) WriteToFile(filename string) error {
-	// Generate LLVM IR to a string
 	var buf strings.Builder
 	_, err := g.module.WriteTo(&buf)
 	if err != nil {
 		return err
 	}
 
-	// Get the generated IR
 	ir := buf.String()
+	fmt.Fprintf(os.Stderr, "IR before fixes:\n%s\n", ir)
 
-	// Apply all fixes to function declarations
+	// Apply fixes
+	ir = fixPrintfDeclaration(ir)
+	ir = fixExternalFunctionDeclarations(ir)
 	ir = fixFunctionDeclarations(ir)
+	ir = fixFunctionPointerUsage(ir)
+	ir = fixFunctionTypeUsage(ir)
+	ir = removeDuplicateFunctionDefinitions(ir)
 
-	// Write the modified IR to the file
+	fmt.Fprintf(os.Stderr, "IR after fixes:\n%s\n", ir)
 	return os.WriteFile(filename, []byte(ir), 0644)
 }
 
-func CompileToLLVM(program *ast.Program) (string, error) {
-	// Create a generator
-	generator := New()
+// fixPrintfDeclaration ensures the printf declaration is correct
+func fixPrintfDeclaration(ir string) string {
+	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
 
-	// Generate code for the program
-	module, err := generator.Generate(program)
-	if err != nil {
-		return "", err
-	}
-
-	// Convert module to string
-	var buf strings.Builder
-	_, err = module.WriteTo(&buf)
-	if err != nil {
-		return "", err
-	}
-
-	// Get the generated IR
-	ir := buf.String()
-
-	// Apply our comprehensive fix
-	ir = comprehensiveIRFix(ir)
-
-	// Add standard format strings
-	formatStrings := `
-; Standard format strings
-@.fmt.int = private constant [4 x i8] c"%d\0A\00"
-@.fmt.str = private constant [4 x i8] c"%s\0A\00"
-@.fmt.float = private constant [4 x i8] c"%f\0A\00"
-@.fmt.bool = private constant [4 x i8] c"%d\0A\00"
-`
-	ir = ir + "\n" + formatStrings
-
-	return ir, nil
-}
-
-// Process string constants to ensure proper formatting
-func processStringConstants(ir string) string {
-	// Find all string constants
-	strConstPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*?c"([^"]*)".*`)
-
-	return strConstPattern.ReplaceAllStringFunc(ir, func(s string) string {
-		matches := strConstPattern.FindStringSubmatch(s)
-		if len(matches) > 1 {
-			content := matches[1]
-
-			// Replace escape sequences with their proper representation in LLVM IR
-			// Handle common escape sequences
-			content = strings.ReplaceAll(content, "\\n", "\\0A")  // Newline
-			content = strings.ReplaceAll(content, "\\t", "\\09")  // Tab
-			content = strings.ReplaceAll(content, "\\\"", "\\22") // Double quote
-			content = strings.ReplaceAll(content, "\\\\", "\\5C") // Backslash
-
-			// Ensure proper null termination
-			if !strings.HasSuffix(content, "\\00") {
-				content = content + "\\00"
-			}
-
-			// Reconstruct the string constant with proper escaping
-			reconstructed := strings.Replace(s, matches[1], content, 1)
-			return reconstructed
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "declare ") && strings.Contains(trimmedLine, "@printf") {
+			// Replace any incorrect printf declaration with the correct one
+			result = append(result, "declare i32 @printf(i8*, ...)")
+			continue
 		}
-		return s
-	})
+		result = append(result, line)
+	}
+
+	return strings.Join(result, "\n")
 }
 
+// fixExternalFunctionDeclarations fixes malformed external function declarations
+func fixExternalFunctionDeclarations(ir string) string {
+	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			result = append(result, line)
+			continue
+		}
+
+		// Fix malformed external function declarations
+		if strings.HasPrefix(trimmedLine, "declare ") {
+			switch {
+			case strings.Contains(trimmedLine, "@malloc"):
+				result = append(result, "declare i8* @malloc(i64)")
+				continue
+			case strings.Contains(trimmedLine, "@free"):
+				result = append(result, "declare void @free(i8*)")
+				continue
+			case strings.Contains(trimmedLine, "@strlen"):
+				result = append(result, "declare i64 @strlen(i8*)")
+				continue
+			case strings.Contains(trimmedLine, "@strcpy"):
+				result = append(result, "declare i8* @strcpy(i8*, i8*)")
+				continue
+			case strings.Contains(trimmedLine, "@abs"):
+				result = append(result, "declare i32 @abs(i32)")
+				continue
+			case strings.Contains(trimmedLine, "@pow"):
+				result = append(result, "declare double @pow(double, double)")
+				continue
+			case strings.Contains(trimmedLine, "@exit"):
+				result = append(result, "declare void @exit(i32)")
+				continue
+			}
+		}
+
+		result = append(result, line)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// fixFunctionDeclarations fixes malformed function declarations
 func fixFunctionDeclarations(ir string) string {
-	// First completely remove all existing declarations of standard library functions
-	// This ensures we don't have any duplicates or malformed declarations
-	stdlibFuncs := []string{"printf", "malloc", "free", "strlen", "strcpy", "abs", "pow", "exit"}
+	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
 
-	for _, funcName := range stdlibFuncs {
-		pattern := regexp.MustCompile(`declare\s+[^@]*@` + funcName + `[^\n]*\n`)
-		ir = pattern.ReplaceAllString(ir, "")
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			result = append(result, line)
+			continue
+		}
+
+		// Fix global variable declarations with function pointers
+		if strings.HasPrefix(trimmedLine, "@") && strings.Contains(trimmedLine, "= global") {
+			if strings.Contains(trimmedLine, "i32 (i32) ()*") {
+				fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32) ()*", "i32 (i32)*")
+				result = append(result, fixedLine)
+				continue
+			}
+			if strings.Contains(trimmedLine, "i32 (i32)") && !strings.Contains(trimmedLine, "i32 (i32)*") {
+				fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32)", "i32 (i32)*")
+				result = append(result, fixedLine)
+				continue
+			}
+		}
+
+		// Fix function definitions
+		if strings.HasPrefix(trimmedLine, "define ") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32) () ", "i32 (i32) ")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 () ", "i32 ")
+			result = append(result, fixedLine)
+			continue
+		}
+
+		result = append(result, line)
 	}
 
-	// Add our own properly formatted declarations at the beginning
-	stdlibDecls := `
-    ; Standard C library function declarations
-    declare i32 @printf(i8*, ...)
-    declare i8* @malloc(i64)
-    declare void @free(i8*)
-    declare i64 @strlen(i8*)
-    declare i8* @strcpy(i8*, i8*)
-    declare i32 @abs(i32)
-    declare double @pow(double, double)
-    declare void @exit(i32)
-    `
-	ir = stdlibDecls + ir
-
-	// Fix function definitions with wrong syntax
-	// e.g., "define i32 (i32) @factorial()" -> "define i32 @factorial(i32)"
-	funcDefPattern := regexp.MustCompile(`define\s+([a-zA-Z0-9*]+)\s+\(([^)]+)\)\s+@([a-zA-Z0-9_]+)\(\)`)
-	ir = funcDefPattern.ReplaceAllString(ir, "define $1 @$3($2)")
-
-	// Fix main function declaration specifically
-	mainDefPattern := regexp.MustCompile(`define\s+i32\s+\(\)\s+@main\(\)`)
-	ir = mainDefPattern.ReplaceAllString(ir, "define i32 @main()")
-
-	return ir
+	return strings.Join(result, "\n")
 }
 
+// fixFunctionPointerUsage fixes incorrect function pointer usage
 func fixFunctionPointerUsage(ir string) string {
-	// Split IR into lines to process each line individually
 	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
 
-	// Process each line
-	for i, line := range lines {
-		// Look for function types in return statements
-		if strings.Contains(line, "ret ") {
-			// Check if there's a function type being used in a return statement
-			// Pattern: ret i32 (i32) %reg
-			retFuncPattern := regexp.MustCompile(`ret\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
-			matches := retFuncPattern.FindStringSubmatch(line)
-
-			if len(matches) >= 4 {
-				// Extract the return type and register
-				returnType := matches[1]
-				register := matches[3]
-
-				// Replace the function type with a simple value type
-				lines[i] = strings.Replace(line,
-					"ret "+returnType+" ("+matches[2]+") "+register,
-					"ret "+returnType+" "+register, 1)
-			}
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			result = append(result, line)
+			continue
 		}
 
-		// Look for arithmetic operations with pointers
-		if strings.Contains(line, "= add") ||
-			strings.Contains(line, "= sub") ||
-			strings.Contains(line, "= mul") ||
-			strings.Contains(line, "= div") ||
-			strings.Contains(line, "= rem") {
-
-			// First, check and fix pointer types in arithmetic
-			ptrArithPattern := regexp.MustCompile(`(add|sub|mul|div|rem)\s+(i[0-9]+)\*\s+(%[0-9]+),\s+(%[0-9]+)`)
-			if matches := ptrArithPattern.FindStringSubmatch(line); len(matches) >= 5 {
-				op := matches[1]
-				valType := matches[2]
-				reg1 := matches[3]
-				reg2 := matches[4]
-
-				// Replace pointer arithmetic with non-pointer
-				lines[i] = strings.Replace(line,
-					op+" "+valType+"* "+reg1+", "+reg2,
-					op+" "+valType+" "+reg1+", "+reg2, 1)
-				continue
-			}
-
-			// Check if there's a function type being used in an arithmetic operation
-			// Pattern: i32 (i32) %reg
-			funcTypePattern := regexp.MustCompile(`(i[0-9]+)\s+\([^)]+\)\s+(%[0-9]+)`)
-			matches := funcTypePattern.FindAllStringSubmatch(line, -1)
-
-			if len(matches) > 0 {
-				modifiedLine := line
-				for _, match := range matches {
-					if len(match) >= 3 {
-						// Extract the return type and register
-						returnType := match[1]
-						register := match[2]
-
-						// Replace the function type with a simple value type
-						modifiedLine = strings.Replace(modifiedLine,
-							returnType+" ("+returnType+") "+register,
-							returnType+" "+register, 1)
-					}
-				}
-				lines[i] = modifiedLine
-			}
+		// Fix load instructions for function pointers
+		if strings.Contains(trimmedLine, "= load") && strings.Contains(trimmedLine, "i32 (i32)") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32), i32 (i32)*", "i32 (i32)*, i32 (i32)**")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*, i32 (i32) ()**", "i32 (i32)*, i32 (i32)**")
+			result = append(result, fixedLine)
+			continue
 		}
 
-		// Fix function call patterns for variadic functions (like printf)
-		if strings.Contains(line, "= call") {
-			// Fix function types in function arguments
-			// Pattern: call i32 @printf(..., i32 (i32) %reg, ...)
-			funcArgPattern := regexp.MustCompile(`call\s+[^,]*,\s*(?:[^,]*,\s*)*([a-zA-Z0-9*]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
-			if matches := funcArgPattern.FindStringSubmatch(line); len(matches) >= 4 {
-				argType := matches[1]
-				argReg := matches[3]
-				lines[i] = strings.Replace(line,
-					argType+" ("+matches[2]+") "+argReg,
-					argType+"* "+argReg, 1)
-				continue
-			}
-
-			// Check and fix printf-style variadic function calls
-			// Pattern: call i32 (i8*) (...) @printf
-			printfPattern := regexp.MustCompile(`call\s+(i[0-9]+)\s+\(([^)]+)\)\s+\(\.\.\.\)\s+@([a-zA-Z0-9_]+)`)
-			if matches := printfPattern.FindStringSubmatch(line); len(matches) >= 4 {
-				returnType := matches[1]
-				funcName := matches[3]
-				lines[i] = strings.Replace(line,
-					"call "+returnType+" ("+matches[2]+") (...) @"+funcName,
-					"call "+returnType+" @"+funcName, 1)
-				continue
-			}
-
-			// Check if there's a regular function pointer call
-			callPattern := regexp.MustCompile(`call\s+(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
-			matches := callPattern.FindStringSubmatch(line)
-			if len(matches) >= 4 {
-				// Extract return type, argument types, and register
-				returnType := matches[1]
-				register := matches[3]
-
-				// Fix the call syntax
-				lines[i] = strings.Replace(line,
-					"call "+returnType+" ("+matches[2]+") "+register,
-					"call "+returnType+" "+register, 1)
-			}
-		}
-
-		// Also fix function types in function arguments
-		if strings.Contains(line, "i32 (i32)") || strings.Contains(line, "i32*") {
-			// First, look for pointer types
-			ptrPattern := regexp.MustCompile(`(i[0-9]+)\*\s+(%[0-9]+)`)
-			matches := ptrPattern.FindAllStringSubmatch(line, -1)
-
-			if len(matches) > 0 {
-				newLine := line
-				for _, match := range matches {
-					if len(match) >= 3 {
-						valType := match[1]
-						regName := match[2]
-						// Replace pointer syntax with just the base type
-						newLine = strings.Replace(newLine,
-							valType+"* "+regName,
-							valType+" "+regName, 1)
-					}
-				}
-				lines[i] = newLine
-				continue
-			}
-
-			// Then look for function types
-			funcArgPattern := regexp.MustCompile(`(i[0-9]+)\s+\(([^)]+)\)\s+(%[0-9]+)`)
-			matches = funcArgPattern.FindAllStringSubmatch(line, -1)
-
-			if len(matches) > 0 {
-				newLine := line
-				for _, match := range matches {
-					if len(match) >= 3 {
-						argType := match[1]
-						argReg := match[3]
-						newLine = strings.Replace(newLine,
-							argType+" ("+match[2]+") "+argReg,
-							argType+" "+argReg, 1)
-					}
-				}
-				lines[i] = newLine
-			}
-		}
+		result = append(result, line)
 	}
 
-	// Rejoin the lines
-	return strings.Join(lines, "\n")
+	return strings.Join(result, "\n")
 }
 
-func comprehensiveIRFix(ir string) string {
-	// First, apply string constant formatting
-	ir = processStringConstants(ir)
-
-	// Fix function declarations
-	ir = fixFunctionDeclarations(ir)
-
-	// Apply function pointer fixes
-	ir = fixFunctionPointerUsage(ir)
-
-	// Now perform register renumbering with direct text replacements
+// fixFunctionTypeUsage fixes incorrect function type usage
+func fixFunctionTypeUsage(ir string) string {
 	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
 
-	// Process each function independently
-	inFunction := false
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			result = append(result, line)
+			continue
+		}
+
+		// Fix function types with extraneous ()*
+		if strings.Contains(trimmedLine, "i32 (i32) ()*") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32) ()*", "i32 (i32)*")
+			result = append(result, fixedLine)
+			continue
+		}
+		if strings.Contains(trimmedLine, "i32 ()*") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 ()*", "i32")
+			result = append(result, fixedLine)
+			continue
+		}
+		if strings.Contains(trimmedLine, "i32 (i32)") && !strings.Contains(trimmedLine, "i32 (i32)*") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32)", "i32")
+			result = append(result, fixedLine)
+			continue
+		}
+		// Fix call instructions with incorrect return types
+		if strings.Contains(trimmedLine, "= call i32 (i32)") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32)", "i32")
+			result = append(result, fixedLine)
+			continue
+		}
+		// Fix function signatures with extraneous () in definitions
+		if strings.Contains(trimmedLine, "i32 (i32) () ") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32) () ", "i32 (i32) ")
+			result = append(result, fixedLine)
+			continue
+		}
+		// Fix incorrect return type references
+		if strings.Contains(trimmedLine, "i32 (i32) ") {
+			fixedLine := strings.ReplaceAll(trimmedLine, "i32 (i32) ", "i32 ")
+			result = append(result, fixedLine)
+			continue
+		}
+
+		result = append(result, line)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// removeDuplicateFunctionDefinitions removes duplicate function definitions
+func removeDuplicateFunctionDefinitions(ir string) string {
+	lines := strings.Split(ir, "\n")
+	seenFunctions := make(map[string]bool)
+	result := []string{}
+	currentFunction := ""
 	functionLines := []string{}
-	fixedLines := []string{}
+	inFunction := false
 
-	for i, line := range lines {
+	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
-		// Detect function start
 		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
-			// If we were in a function, process it
 			if inFunction {
-				processedFunctionLines := simpleRegisterRenumbering(functionLines)
-				fixedLines = append(fixedLines, processedFunctionLines...)
+				if !seenFunctions[currentFunction] {
+					result = append(result, functionLines...)
+					seenFunctions[currentFunction] = true
+				}
+				functionLines = []string{}
 			}
 
-			// Start a new function
-			inFunction = true
-			functionLines = []string{line}
+			matches := regexp.MustCompile(`@([a-zA-Z0-9_]+)`).FindStringSubmatch(line)
+			if len(matches) > 1 {
+				currentFunction = matches[1]
+				inFunction = true
+			}
+			functionLines = append(functionLines, line)
 			continue
 		}
 
-		// Detect function end (next function start or end of file)
-		if inFunction && (i == len(lines)-1 ||
-			(strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@"))) {
-			// Add the current line if it's the last one and not a new function
-			if i == len(lines)-1 && !strings.HasPrefix(trimmedLine, "define ") {
-				functionLines = append(functionLines, line)
+		if inFunction && strings.TrimSpace(line) == "}" {
+			functionLines = append(functionLines, line)
+			if !seenFunctions[currentFunction] {
+				result = append(result, functionLines...)
+				seenFunctions[currentFunction] = true
 			}
-
-			// Process the complete function
-			processedFunctionLines := simpleRegisterRenumbering(functionLines)
-			fixedLines = append(fixedLines, processedFunctionLines...)
-
-			// Reset
 			inFunction = false
 			functionLines = []string{}
-
-			// If this was a new function definition, process it in the next iteration
-			if i != len(lines)-1 {
-				i--
-			}
+			currentFunction = ""
 			continue
 		}
 
-		// Collect lines within a function
 		if inFunction {
 			functionLines = append(functionLines, line)
 		} else {
-			// Lines outside functions go straight to output
-			fixedLines = append(fixedLines, line)
+			result = append(result, line)
 		}
 	}
 
-	// Join everything back
-	return strings.Join(fixedLines, "\n")
-}
-
-func simpleRegisterRenumbering(lines []string) []string {
-	result := make([]string, len(lines))
-
-	// Find all register definitions and map them to new numbers
-	regDefs := make(map[string]int)
-	nextRegNum := 0
-
-	// First pass: identify all parameter registers
-	for _, line := range lines {
-		if strings.Contains(line, "define ") {
-			// Parameters are in the function definition
-			paramMatches := regexp.MustCompile(`%[0-9]+`).FindAllString(line, -1)
-			for _, param := range paramMatches {
-				regDefs[param] = nextRegNum
-				nextRegNum++
-			}
-			break
-		}
+	if inFunction && !seenFunctions[currentFunction] {
+		result = append(result, functionLines...)
 	}
 
-	// Second pass: identify all instruction registers
-	instRegNum := 1 // Start instruction numbering at 1
-	for _, line := range lines {
-		if strings.Contains(line, " = ") {
-			// This is an instruction that defines a register
-			defMatch := regexp.MustCompile(`(%[0-9]+)\s+=`).FindStringSubmatch(line)
-			if len(defMatch) > 1 {
-				reg := defMatch[1]
-				if _, exists := regDefs[reg]; !exists {
-					// Only assign if not already assigned as parameter
-					regDefs[reg] = instRegNum
-					instRegNum++
-				}
-			}
-		}
-	}
-
-	// Third pass: apply the renumbering
-	for i, line := range lines {
-		newLine := line
-
-		// Replace all registers with their new numbers
-		regMatches := regexp.MustCompile(`%[0-9]+`).FindAllString(line, -1)
-		for _, reg := range regMatches {
-			if newNum, exists := regDefs[reg]; exists {
-				// Replace this register with its new number
-				newReg := fmt.Sprintf("%%%d", newNum)
-				// Use a regex that avoids partial replacements
-				pattern := fmt.Sprintf(`(^|\s|,|\()%s(\s|,|\)|$)`, regexp.QuoteMeta(reg))
-				re := regexp.MustCompile(pattern)
-				newLine = re.ReplaceAllString(newLine, "${1}"+newReg+"${2}")
-			}
-		}
-
-		result[i] = newLine
-	}
-
-	return result
+	return strings.Join(result, "\n")
 }
