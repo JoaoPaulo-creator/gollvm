@@ -1,8 +1,10 @@
 build:
 	go build .
+	./compiler input.toy
+	./input
 
 compile:
-	./compiler input.xyz
+	./compiler input.toy
 
 run:
 	./input
