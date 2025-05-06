@@ -58,7 +58,6 @@ func main() {
 }
 
 // compile compiles source code to LLVM IR
-// compile compiles source code to LLVM IR
 func compile(source string) (string, error) {
 	// Lexical analysis
 	tokens, err := lexer.TokenizeFile(source)
