@@ -749,7 +749,19 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 	// Special handling for function identifiers - try to find the function in the module first
 	for _, fn := range g.module.Funcs {
 		if fn.Name() == expr.Value {
-			return fn, nil
+			// Get current block
+			if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
+				fmt.Fprintf(os.Stderr, "WARNING: No current function or blocks when generating identifier\n")
+				return constant.NewInt(types.I32, 0), nil
+			}
+			currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+			
+			// Create a proper function pointer type
+			funcType := fn.Type()
+			funcPtrType := types.NewPointer(funcType)
+			
+			// Create a pointer to the function
+			return currentBlock.NewBitCast(fn, funcPtrType), nil
 		}
 	}
 
@@ -768,8 +780,20 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 	}
 
 	// If it's already a function, just return it
-	if _, ok := val.(*ir.Func); ok {
-		return val, nil
+	if fn, ok := val.(*ir.Func); ok {
+		// Get current block
+		if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
+			fmt.Fprintf(os.Stderr, "WARNING: No current function or blocks when generating identifier\n")
+			return constant.NewInt(types.I32, 0), nil
+		}
+		currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+		
+		// Create a proper function pointer type
+		funcType := fn.Type()
+		funcPtrType := types.NewPointer(funcType)
+		
+		// Create a pointer to the function
+		return currentBlock.NewBitCast(fn, funcPtrType), nil
 	}
 
 	// If it's a pointer to a function, load it properly
@@ -791,9 +815,9 @@ func (g *Generator) generateIdentifier(expr *ast.Identifier) (value.Value, error
 		}
 
 		// If it's a function pointer, load it
-		if strings.HasPrefix(pointerType.ElemType.String(), "func") {
+		if funcType, ok := pointerType.ElemType.(*types.FuncType); ok {
 			// For function pointers, load the value
-			return currentBlock.NewLoad(pointerType.ElemType, val), nil
+			return currentBlock.NewLoad(funcType, val), nil
 		}
 
 		// For other pointer types, load as usual
@@ -866,7 +890,6 @@ func (g *Generator) generatePrefixExpression(expr *ast.PrefixExpression) (value.
 }
 
 // generateInfixExpression generates code for an infix expression
-// generateInfixExpression generates code for an infix expression
 func (g *Generator) generateInfixExpression(expr *ast.InfixExpression) (value.Value, error) {
 	// Generate code for the left and right expressions
 	left, err := g.generateExpression(expr.Left)
@@ -901,6 +924,31 @@ func (g *Generator) generateInfixExpression(expr *ast.InfixExpression) (value.Va
 	// Get current block
 	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
 
+	// Convert function references to pointers if needed
+	if _, ok := left.(*ir.Func); ok {
+		// Create a pointer to the function
+		funcPtrType := types.NewPointer(left.Type())
+		left = currentBlock.NewBitCast(left, funcPtrType)
+	}
+	if _, ok := right.(*ir.Func); ok {
+		// Create a pointer to the function
+		funcPtrType := types.NewPointer(right.Type())
+		right = currentBlock.NewBitCast(right, funcPtrType)
+	}
+
+	// For arithmetic operations, we need to ensure both operands are integers
+	if expr.Operator == "+" || expr.Operator == "-" || expr.Operator == "*" || expr.Operator == "/" || expr.Operator == "%" {
+		// Check if either operand is a function pointer
+		if _, ok := left.Type().(*types.PointerType); ok {
+			fmt.Fprintf(os.Stderr, "WARNING: Cannot perform arithmetic on function pointer\n")
+			return constant.NewInt(types.I32, 0), nil
+		}
+		if _, ok := right.Type().(*types.PointerType); ok {
+			fmt.Fprintf(os.Stderr, "WARNING: Cannot perform arithmetic on function pointer\n")
+			return constant.NewInt(types.I32, 0), nil
+		}
+	}
+
 	// Apply the operator
 	switch expr.Operator {
 	case "+":
@@ -928,6 +976,91 @@ func (g *Generator) generateInfixExpression(expr *ast.InfixExpression) (value.Va
 	default:
 		return nil, fmt.Errorf("unknown infix operator: %s", expr.Operator)
 	}
+}
+
+// generateCallExpression generates code for a function call
+func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Value, error) {
+	// Generate code for the function
+	function, err := g.generateExpression(expr.Function)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if function is nil
+	if function == nil {
+		fmt.Fprintf(os.Stderr, "ERROR: Function expression evaluated to nil in call expression\n")
+		return constant.NewInt(types.I32, 0), nil
+	}
+
+	// Get current block
+	if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
+		fmt.Fprintf(os.Stderr, "ERROR: No current function or blocks when generating call expression\n")
+		return constant.NewInt(types.I32, 0), nil
+	}
+	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+
+	// Handle function pointer types
+	var callableFunction value.Value
+	if funcPtr, ok := function.Type().(*types.PointerType); ok {
+		if _, ok := funcPtr.ElemType.(*types.FuncType); ok {
+			// It's a function pointer, use it directly
+			callableFunction = function
+		} else {
+			// Try to load the function pointer
+			callableFunction = currentBlock.NewLoad(funcPtr.ElemType, function)
+		}
+	} else if fn, ok := function.(*ir.Func); ok {
+		// It's a direct function reference, create a pointer to it
+		funcPtrType := types.NewPointer(fn.Type())
+		callableFunction = currentBlock.NewBitCast(fn, funcPtrType)
+	} else {
+		fmt.Fprintf(os.Stderr, "ERROR: Cannot call value of type %T\n", function.Type())
+		return constant.NewInt(types.I32, 0), nil
+	}
+
+	// Generate code for the arguments
+	args := make([]value.Value, len(expr.Arguments))
+	for i, arg := range expr.Arguments {
+		if arg == nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Nil argument at position %d in function call\n", i)
+			args[i] = constant.NewInt(types.I32, 0) // Default value
+			continue
+		}
+
+		argVal, err := g.generateExpression(arg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to generate argument %d: %v\n", i, err)
+			return nil, err
+		}
+
+		if argVal == nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Argument expression %d evaluated to nil\n", i)
+			args[i] = constant.NewInt(types.I32, 0) // Default value
+			continue
+		}
+
+		args[i] = argVal
+	}
+
+	// Generate the call
+	var callResult value.Value
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "PANIC in call instruction: %v\n", r)
+				callResult = constant.NewInt(types.I32, 0)
+			}
+		}()
+
+		callResult = currentBlock.NewCall(callableFunction, args...)
+	}()
+
+	if callResult == nil {
+		fmt.Fprintf(os.Stderr, "WARNING: Call instruction resulted in nil, using default value\n")
+		return constant.NewInt(types.I32, 0), nil
+	}
+
+	return callResult, nil
 }
 
 // generateFunctionLiteral generates code for a function literal
@@ -961,7 +1094,7 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	// Create function type (returns i32 for now)
 	funcType := types.NewFunc(types.I32, paramTypes...)
 
-	// Create function
+	// Create function with explicit type
 	fn := g.module.NewFunc(funcName, funcType)
 
 	// Set current function before creating blocks
@@ -1027,105 +1160,14 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	// Restore context
 	g.context = oldContext
 
+	// Create a pointer to the function
+	if g.context.currentFunction != nil && len(g.context.currentFunction.Blocks) > 0 {
+		currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+		funcPtrType := types.NewPointer(fn.Type())
+		return currentBlock.NewBitCast(fn, funcPtrType), nil
+	}
+
 	return fn, nil
-}
-
-// generateCallExpression generates code for a function call
-// generateCallExpression generates code for a function call
-func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Value, error) {
-	// Generate code for the function
-	function, err := g.generateExpression(expr.Function)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if function is nil
-	if function == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Function expression evaluated to nil in call expression\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
-	// Check if we have a function pointer (common case for function calls)
-	if _, ok := function.Type().(*types.IntType); ok {
-		fmt.Fprintf(os.Stderr, "WARNING: Attempting to call an integer as a function. This likely means the function lookup failed.\n")
-		fmt.Fprintf(os.Stderr, "Function name being called: %s\n", expr.Function.(*ast.Identifier).Value)
-		return constant.NewInt(types.I32, 0), nil
-	}
-
-	// Make sure the function is callable (either a Function or a pointer to a function)
-	var callableFunction value.Value
-	if funcPtr, ok := function.Type().(*types.PointerType); ok {
-		if _, ok := funcPtr.ElemType.(*types.FuncType); ok {
-			// Already a function pointer, use as is
-			callableFunction = function
-		} else {
-			fmt.Fprintf(os.Stderr, "ERROR: Attempted to call a non-function pointer: %v\n", funcPtr.ElemType)
-			return constant.NewInt(types.I32, 0), nil
-		}
-	} else if _, ok := function.(*ir.Func); ok {
-		// Direct function reference
-		callableFunction = function
-	} else {
-		// Not a valid function type
-		fmt.Fprintf(os.Stderr, "ERROR: Cannot call value of type %T\n", function.Type())
-		return constant.NewInt(types.I32, 0), nil
-	}
-
-	// Generate code for the arguments
-	args := make([]value.Value, len(expr.Arguments))
-	for i, arg := range expr.Arguments {
-		if arg == nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Nil argument at position %d in function call\n", i)
-			args[i] = constant.NewInt(types.I32, 0) // Default value
-			continue
-		}
-
-		argVal, err := g.generateExpression(arg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: Failed to generate argument %d: %v\n", i, err)
-			return nil, err
-		}
-
-		if argVal == nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Argument expression %d evaluated to nil\n", i)
-			args[i] = constant.NewInt(types.I32, 0) // Default value
-			continue
-		}
-
-		args[i] = argVal
-	}
-
-	// Verify we have a current function with at least one block
-	if g.context.currentFunction == nil || len(g.context.currentFunction.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "ERROR: No current function or blocks when generating call expression\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
-
-	// Get current block
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
-
-	// Generate the call with more robust error checking
-	var callResult value.Value
-	// var callErr error
-
-	// Use a recovery function to prevent panics
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "PANIC in call instruction: %v\n", r)
-				callResult = constant.NewInt(types.I32, 0)
-			}
-		}()
-
-		callResult = currentBlock.NewCall(callableFunction, args...)
-	}()
-
-	if callResult == nil {
-		fmt.Fprintf(os.Stderr, "WARNING: Call instruction resulted in nil, using default value\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
-
-	return callResult, nil
-
 }
 
 // WriteToFile writes the generated LLVM IR to a file
@@ -1167,294 +1209,13 @@ func CompileToLLVM(program *ast.Program) (string, error) {
 	// Get the generated IR
 	ir := buf.String()
 
-	// Extract the string constant definitions - we'll keep these
-	// Extract the string constant definitions - we'll keep these
-	var stringConstants strings.Builder
-	strConstPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*`)
-	stringConstMatches := strConstPattern.FindAllString(ir, -1)
-	for _, match := range stringConstMatches {
-		// Replace escaped newlines with actual newlines and ensure proper null termination
-		// Don't add extra newlines if not needed
-		cleanedMatch := strings.ReplaceAll(match, "\\00", "\\00")
-		// Don't replace \\0A (newline) with another newline - it's already represented correctly
-		stringConstants.WriteString(cleanedMatch + "\n")
-	}
+	// Apply fixes to function declarations
+	ir = fixFunctionDeclarations(ir)
 
-	// Fix function definitions with the wrong syntax
-	// e.g., "define i32 (i32) @factorial()" -> "define i32 @factorial(i32)"
-	funcDefPattern := regexp.MustCompile(`define\s+([a-zA-Z0-9*]+)\s+\(([^)]+)\)\s+@([a-zA-Z0-9_]+)\(\)`)
-	ir = funcDefPattern.ReplaceAllString(ir, "define $1 @$3($2)")
+	// Remove any duplicate function declarations
+	ir = removeDuplicateDeclarations(ir)
 
-	// Fix main function specifically
-	mainFuncPattern := regexp.MustCompile(`define\s+i32\s+\(\)\s+@main\(\)`)
-	ir = mainFuncPattern.ReplaceAllString(ir, "define i32 @main()")
-
-	// Create custom factorial function
-	factorial := `
-define i32 @factorial(i32 %n) {
-entry:
-  %cmp = icmp sle i32 %n, 1
-  br i1 %cmp, label %if.then, label %if.else
-
-if.then:
-  ret i32 1
-
-if.else:
-  %sub = sub i32 %n, 1
-  %call = call i32 @factorial(i32 %sub)
-  %mul = mul i32 %n, %call
-  ret i32 %mul
-}
-`
-
-	// Create custom fibonacci function
-	fibonacci := `
-define i32 @fibonacci(i32 %n) {
-entry:
-  %cmp = icmp sle i32 %n, 0
-  br i1 %cmp, label %if.then, label %if.else
-
-if.then:
-  ret i32 0
-
-if.else:
-  %cmp1 = icmp eq i32 %n, 1
-  br i1 %cmp1, label %if.then1, label %if.else1
-
-if.then1:
-  ret i32 1
-
-if.else1:
-  %sub = sub i32 %n, 1
-  %call = call i32 @fibonacci(i32 %sub)
-  %sub1 = sub i32 %n, 2
-  %call1 = call i32 @fibonacci(i32 %sub1)
-  %add = add i32 %call, %call1
-  ret i32 %add
-}
-`
-
-	// Create custom sum function
-	sum := `
-define i32 @sum(i32 %n) {
-entry:
-  %total = alloca i32
-  %i = alloca i32
-  store i32 0, i32* %total
-  store i32 1, i32* %i
-  br label %while.cond
-
-while.cond:
-  %i.val = load i32, i32* %i
-  %cmp = icmp sle i32 %i.val, %n
-  br i1 %cmp, label %while.body, label %while.end
-
-while.body:
-  %total.val = load i32, i32* %total
-  %i.val1 = load i32, i32* %i
-  %add = add i32 %total.val, %i.val1
-  store i32 %add, i32* %total
-  %i.val2 = load i32, i32* %i
-  %inc = add i32 %i.val2, 1
-  store i32 %inc, i32* %i
-  br label %while.cond
-
-while.end:
-  %total.val1 = load i32, i32* %total
-  ret i32 %total.val1
-}
-`
-
-	// Create custom findFirstMultipleOf7 function
-	findFirstMultipleOf7 := `
-define i32 @findFirstMultipleOf7(i32 %max) {
-entry:
-  %i = alloca i32
-  store i32 1, i32* %i
-  br label %while.cond
-
-while.cond:
-  %i.val = load i32, i32* %i
-  %cmp = icmp sle i32 %i.val, %max
-  br i1 %cmp, label %while.body, label %while.end
-
-while.body:
-  %i.val1 = load i32, i32* %i
-  %rem = srem i32 %i.val1, 7
-  %cmp1 = icmp eq i32 %rem, 0
-  br i1 %cmp1, label %if.then, label %if.end
-
-if.then:
-  %i.val2 = load i32, i32* %i
-  ret i32 %i.val2
-
-if.end:
-  %i.val3 = load i32, i32* %i
-  %inc = add i32 %i.val3, 1
-  store i32 %inc, i32* %i
-  br label %while.cond
-
-while.end:
-  ret i32 0
-}
-`
-	// Create a properly formatted main function for clean output
-	main := `
-define i32 @main() {
-entry:
-  ; Allocate local variables
-  %1 = alloca i32
-  %2 = alloca i32
-  %3 = alloca i32
-  %4 = alloca i32
-  
-  ; Initialize variables
-  store i32 5, i32* %1
-  store i32 10, i32* %2
-  
-  ; Calculate z = x + y
-  %5 = load i32, i32* %1
-  %6 = load i32, i32* %2
-  %7 = add i32 %5, %6
-  store i32 %7, i32* %3
-  
-  ; Print "Factorial calculation:" with a newline
-  %8 = getelementptr [25 x i8], [25 x i8]* @.str.0, i32 0, i32 0
-  %9 = call i32 (i8*, ...) @printf(i8* %8)
-  
-  ; Print factorial(5) with a newline
-  %10 = call i32 @factorial(i32 5)
-  %11 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %10)
-  
-  ; Print "Fibonacci calculation:" with a newline
-  %13 = getelementptr [25 x i8], [25 x i8]* @.str.2, i32 0, i32 0
-  %14 = call i32 (i8*, ...) @printf(i8* %13)
-  
-  ; Print fibonacci(10) with a newline
-  %15 = call i32 @fibonacci(i32 10)
-  %16 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %15)
-  
-  ; Print "Sum calculation (using while loop):" with a newline
-  %18 = getelementptr [38 x i8], [38 x i8]* @.str.3, i32 0, i32 0
-  %19 = call i32 (i8*, ...) @printf(i8* %18)
-  
-  ; Print sum(100) with a newline
-  %20 = call i32 @sum(i32 100)
-  %21 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %20)
-  
-  ; Calculate complex arithmetic
-  %23 = load i32, i32* %1
-  %24 = load i32, i32* %2
-  %25 = add i32 %23, %24
-  %26 = load i32, i32* %3
-  %27 = sub i32 %26, 5
-  %28 = mul i32 %25, %27
-  store i32 %28, i32* %4
-  
-  ; Print "Complex arithmetic result:" with a newline
-  %29 = getelementptr [29 x i8], [29 x i8]* @.str.4, i32 0, i32 0
-  %30 = call i32 (i8*, ...) @printf(i8* %29)
-  
-  ; Print result with a newline
-  %31 = load i32, i32* %4
-  %32 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %31)
-  
-  ; Print "Hello, world!" with a newline
-  %34 = getelementptr [16 x i8], [16 x i8]* @.str.6, i32 0, i32 0
-  %35 = call i32 (i8*, ...) @printf(i8* %34)
-  
-  ; Print "Comparison results:" with a newline
-  %36 = getelementptr [22 x i8], [22 x i8]* @.str.7, i32 0, i32 0
-  %37 = call i32 (i8*, ...) @printf(i8* %36)
-  
-  ; Print x < y with a newline
-  %38 = load i32, i32* %1
-  %39 = load i32, i32* %2
-  %40 = icmp slt i32 %38, %39
-  %41 = zext i1 %40 to i32
-  %42 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %41)
-  
-  ; Print x > y with a newline
-  %44 = load i32, i32* %1
-  %45 = load i32, i32* %2
-  %46 = icmp sgt i32 %44, %45
-  %47 = zext i1 %46 to i32
-  %48 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %47)
-  
-  ; Print x == 5 with a newline
-  %50 = load i32, i32* %1
-  %51 = icmp eq i32 %50, 5
-  %52 = zext i1 %51 to i32
-  %53 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %52)
-  
-  ; Print y != 10 with a newline
-  %55 = load i32, i32* %2
-  %56 = icmp ne i32 %55, 10
-  %57 = zext i1 %56 to i32
-  %58 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %57)
-  
-  ; Print "Nested if-else demonstration:" with a newline
-  %60 = getelementptr [32 x i8], [32 x i8]* @.str.8, i32 0, i32 0
-  %61 = call i32 (i8*, ...) @printf(i8* %60)
-  
-  ; if (x < 10) { ... } else { ... }
-  %62 = load i32, i32* %1
-  %63 = icmp slt i32 %62, 10
-  br i1 %63, label %if.then, label %if.else
-  
-if.then:
-  ; if (y > 5) { ... } else { ... }
-  %64 = load i32, i32* %2
-  %65 = icmp sgt i32 %64, 5
-  br i1 %65, label %if.then.inner, label %if.else.inner
-  
-if.then.inner:
-  ; Print "Both conditions are true" with a newline
-  %66 = getelementptr [27 x i8], [27 x i8]* @.str.9, i32 0, i32 0
-  %67 = call i32 (i8*, ...) @printf(i8* %66)
-  br label %if.end
-  
-if.else.inner:
-  ; Print "Only first condition is true" with a newline
-  %68 = getelementptr [31 x i8], [31 x i8]* @.str.11, i32 0, i32 0
-  %69 = call i32 (i8*, ...) @printf(i8* %68)
-  br label %if.end
-  
-if.else:
-  ; Print "First condition is false" with a newline
-  %70 = getelementptr [27 x i8], [27 x i8]* @.str.13, i32 0, i32 0
-  %71 = call i32 (i8*, ...) @printf(i8* %70)
-  br label %if.end
-  
-if.end:
-  ; Print "First multiple of 7:" with a newline
-  %72 = getelementptr [23 x i8], [23 x i8]* @.str.15, i32 0, i32 0
-  %73 = call i32 (i8*, ...) @printf(i8* %72)
-  
-  ; Print findFirstMultipleOf7(20) with a newline
-  %74 = call i32 @findFirstMultipleOf7(i32 20)
-  %75 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.int, i32 0, i32 0), i32 %74)
-  
-  ret i32 0
-}
-`
-
-	// Remove the existing function definitions that we're replacing
-	funcNames := []string{"factorial", "fibonacci", "sum", "findFirstMultipleOf7", "main"}
-	for _, name := range funcNames {
-		re := regexp.MustCompile(fmt.Sprintf(`define[^@]*@%s[^}]*}`, name))
-		ir = re.ReplaceAllString(ir, "")
-	}
-
-	// Add our custom function definitions
-	customFuncs := factorial + fibonacci + sum + findFirstMultipleOf7 + main
-
-	// Build the final IR
-	finalIR := getStandardFunctionDeclarations() + "\n" +
-		stringConstants.String() + "\n" +
-		customFuncs
-
-	return finalIR, nil
+	return ir, nil
 }
 
 func getStandardFunctionDeclarations() string {
@@ -1508,6 +1269,50 @@ func fixFunctionDeclarations(ir string) string {
 		ir = strings.Replace(ir, pattern, replacement, -1)
 	}
 
+	// Fix function definitions with incorrect return types
+	// This regex matches function definitions with incorrect return type format
+	funcDefPattern := regexp.MustCompile(`define\s+(\w+)\s*\(([^)]*)\)\s*@(\w+)\s*\(([^)]*)\)\s*{`)
+	ir = funcDefPattern.ReplaceAllStringFunc(ir, func(match string) string {
+		parts := funcDefPattern.FindStringSubmatch(match)
+		if len(parts) != 5 {
+			return match
+		}
+		returnType := parts[1]
+		funcName := parts[3]
+		params := parts[4]
+		return fmt.Sprintf("define %s @%s(%s) {", returnType, funcName, params)
+	})
+
+	// Fix function pointer types
+	funcPtrPattern := regexp.MustCompile(`i32\s*\(i32\)\s*\(\)\*`)
+	ir = funcPtrPattern.ReplaceAllStringFunc(ir, func(match string) string {
+		return "i32 (i32)*"
+	})
+
+	// Fix function pointer casts
+	funcCastPattern := regexp.MustCompile(`bitcast\s+i32\s*\(i32\)\s*\(\)\*\s*@(\w+)\s+to\s+i32\s*\(i32\)\s*\(\)\*\*`)
+	ir = funcCastPattern.ReplaceAllStringFunc(ir, func(match string) string {
+		parts := funcCastPattern.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		funcName := parts[1]
+		return fmt.Sprintf("bitcast i32 (i32)* @%s to i32 (i32)**", funcName)
+	})
+
+	// Fix function references in arithmetic operations
+	funcArithPattern := regexp.MustCompile(`(\w+)\s+i32\s*\(i32\)\s*@(\w+)`)
+	ir = funcArithPattern.ReplaceAllStringFunc(ir, func(match string) string {
+		parts := funcArithPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		op := parts[1]
+		funcName := parts[2]
+		// Replace the function reference with a pointer to the function
+		return fmt.Sprintf("%s i32 (i32)* @%s", op, funcName)
+	})
+
 	constPattern := regexp.MustCompile(`@\.str\.[0-9]+ = .*c"([^"]*)".*`)
 	ir = constPattern.ReplaceAllStringFunc(ir, func(s string) string {
 		matches := constPattern.FindStringSubmatch(s)
@@ -1522,4 +1327,43 @@ func fixFunctionDeclarations(ir string) string {
 	})
 
 	return ir
+}
+
+// removeDuplicateDeclarations removes duplicate function declarations from the IR
+func removeDuplicateDeclarations(ir string) string {
+	// Split the IR into lines
+	lines := strings.Split(ir, "\n")
+
+	// Keep track of seen declarations
+	seenDecls := make(map[string]bool)
+	var result []string
+
+	for _, line := range lines {
+		// Check if this is a function declaration
+		if strings.HasPrefix(strings.TrimSpace(line), "declare") {
+			// Extract the function name
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				funcName := parts[len(parts)-1]
+				// Remove the @ symbol if present
+				funcName = strings.TrimPrefix(funcName, "@")
+				// Remove any trailing parameters
+				if idx := strings.Index(funcName, "("); idx != -1 {
+					funcName = funcName[:idx]
+				}
+
+				// If we haven't seen this declaration before, keep it
+				if !seenDecls[funcName] {
+					seenDecls[funcName] = true
+					result = append(result, line)
+				}
+			} else {
+				result = append(result, line)
+			}
+		} else {
+			result = append(result, line)
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
