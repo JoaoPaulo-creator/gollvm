@@ -84,14 +84,18 @@ func fixPrintfCalls(ir string) string {
 	lines := strings.Split(ir, "\n")
 	result := make([]string, 0, len(lines))
 
-	re := regexp.MustCompile(`(call\s+i32\s+)\([^\)]*\)\s*\(\.\.\.\)\s*(@printf\()([^\)]*\))`)
+	// More flexible regex to match printf calls
+	re := regexp.MustCompile(`(call\s+i32\s+)\([^\)]*\)\s*\(\.\.\.\)\s*(@printf\s*\([^\)]*\))`)
 
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmedLine, "%") && strings.Contains(trimmedLine, "= call") && strings.Contains(trimmedLine, "@printf") {
-			fixedLine := re.ReplaceAllString(line, `$1(i8*, ...) $2$3`)
+			// Replace incorrect type with correct variadic signature
+			fixedLine := re.ReplaceAllString(line, `$1(i8*, ...) $2`)
 			if fixedLine != line {
 				fmt.Fprintf(os.Stderr, "Fixed printf call: %s\n", fixedLine)
+			} else {
+				fmt.Fprintf(os.Stderr, "Failed to fix printf call: %s\n", line)
 			}
 			result = append(result, fixedLine)
 			continue
@@ -103,13 +107,17 @@ func fixPrintfCalls(ir string) string {
 }
 
 func declarePrintf(module *ir.Module) *ir.Func {
+	// Explicitly declare printf with correct variadic signature
 	paramTypes := []types.Type{types.NewPointer(types.I8)}
 	printfType := types.NewFunc(types.I32, paramTypes...)
 	fn := module.NewFunc("printf", printfType)
 	fn.Sig.Variadic = true
+
+	// Ensure first parameter is named and of correct type
 	if len(fn.Params) > 0 {
 		fn.Params[0].SetName("format")
 	}
+
 	return fn
 }
 
@@ -408,14 +416,14 @@ func (g *Generator) generateImportStatement(stmt *ast.ImportStatement) (value.Va
 }
 
 func (g *Generator) ensureType(val value.Value, expectedType types.Type) value.Value {
+	// More robust type conversion
 	if val.Type().Equal(expectedType) {
 		return val
 	}
 
-	// Get current block for type conversion instructions
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
+	currentBlock := g.getCurrentBlock()
 
-	// Handle common type conversions
+	// Detailed type conversion logic
 	switch {
 	case types.IsInt(val.Type()) && types.IsInt(expectedType):
 		return currentBlock.NewTrunc(val, expectedType)
@@ -423,8 +431,12 @@ func (g *Generator) ensureType(val value.Value, expectedType types.Type) value.V
 		return currentBlock.NewPtrToInt(val, expectedType)
 	case types.IsInt(val.Type()) && types.IsPointer(expectedType):
 		return currentBlock.NewIntToPtr(val, expectedType)
+	case types.IsFunc(val.Type()):
+		// Special handling for function types
+		funcType := val.Type().(*types.FuncType)
+		return currentBlock.NewBitCast(val, funcType)
 	default:
-		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type conversion from %v to %v, returning original value\n",
+		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type conversion from %v to %v\n",
 			val.Type(), expectedType)
 		return val
 	}
@@ -540,13 +552,14 @@ func (g *Generator) CompileToExecutable(program *ast.Program, outputFile string)
 	}
 
 	ir := buf.String()
+	// Apply fixes in a specific order
 	ir = fixPrintfDeclaration(ir)
 	ir = fixExternalFunctionDeclarations(ir)
 	ir = fixFunctionDeclarations(ir)
 	ir = fixFunctionPointerUsage(ir)
 	ir = fixFunctionTypeUsage(ir)
 	ir = removeDuplicateFunctionDefinitions(ir)
-	ir = fixPrintfCalls(ir) // Add the new fix here
+	ir = fixPrintfCalls(ir) // Ensure this is last to catch all printf calls
 
 	// Add standard format strings
 	formatStrings := `
@@ -556,14 +569,6 @@ func (g *Generator) CompileToExecutable(program *ast.Program, outputFile string)
 @.fmt.float = private constant [4 x i8] c"%f\0A\00"
 @.fmt.bool = private constant [4 x i8] c"%d\0A\00"
 `
-	ir = ir + "\n" + formatStrings
-
-	err = os.WriteFile(irFile, []byte(ir), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write IR to %s: %w", irFile, err)
-	}
-	fmt.Fprintf(os.Stderr, "Generated LLVM IR: %s\n", irFile)
-
 	ir = ir + "\n" + formatStrings
 
 	err = os.WriteFile(irFile, []byte(ir), 0644)
@@ -1220,7 +1225,7 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 		if ptrType, ok := fn.Type().(*types.PointerType); ok {
 			if funcType, ok := ptrType.ElemType.(*types.FuncType); ok {
 				fmt.Fprintf(os.Stderr, "Function pointer call, return type: %v\n", funcType.RetType)
-				returnType = funcType.RetType
+				returnType = normalizeReturnType(funcType.RetType)
 				callableFunction = fn
 			} else {
 				fmt.Fprintf(os.Stderr, "ERROR: Attempted to call a non-function pointer: %v\n", ptrType.ElemType)
@@ -1262,7 +1267,7 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 		}
 
 		// Ensure argument type matches expected parameter type
-		if i < len(callableFunction.(*ir.Func).Sig.Params) {
+		if callableFunction.(*ir.Func).Sig != nil && i < len(callableFunction.(*ir.Func).Sig.Params) {
 			expectedType := callableFunction.(*ir.Func).Sig.Params[i]
 			if !argVal.Type().Equal(expectedType) {
 				fmt.Fprintf(os.Stderr, "WARNING: Argument %d type %v does not match expected %v, attempting conversion\n", i, argVal.Type(), expectedType)
@@ -1296,7 +1301,13 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 	if returnType != nil && !returnType.Equal(types.Void) {
 		if !callResult.Type().Equal(returnType) {
 			fmt.Fprintf(os.Stderr, "WARNING: Call result type %v does not match expected return type %v, attempting conversion\n", callResult.Type(), returnType)
-			callResult = g.ensureType(callResult, returnType)
+			// Avoid converting function types
+			if _, isFunc := callResult.Type().(*types.FuncType); !isFunc {
+				callResult = g.ensureType(callResult, returnType)
+			} else {
+				fmt.Fprintf(os.Stderr, "WARNING: Call result is a function type, defaulting to i32 0\n")
+				callResult = constant.NewInt(types.I32, 0)
+			}
 		}
 		return callResult, nil
 	}
@@ -1413,11 +1424,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	fmt.Fprintf(os.Stderr, "Generating function literal: %s\n", expr.Name)
 	fmt.Fprintf(os.Stderr, "Return Type: %s\n", expr.ReturnType)
 	fmt.Fprintf(os.Stderr, "Number of Parameters: %d\n", len(expr.Parameters))
-	for i, param := range expr.Parameters {
-		fmt.Fprintf(os.Stderr, "Parameter %d: %s\n", i, param.Value)
-	}
-
-	// Check for existing function
 	for _, existingFunc := range g.module.Funcs {
 		if existingFunc.Name() == expr.Name {
 			fmt.Fprintf(os.Stderr, "Reusing existing function: %s\n", expr.Name)
@@ -1425,14 +1431,7 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		}
 	}
 
-	// Create function name
-	funcName := expr.Name
-	if funcName == "" {
-		funcName = fmt.Sprintf("anon.%d", g.blockCounter)
-		g.blockCounter++
-	}
-
-	// Determine return type
+	// Simplify return type handling
 	var retType types.Type
 	switch expr.ReturnType {
 	case "void":
@@ -1442,23 +1441,20 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	case "int", "":
 		retType = types.I32
 	default:
-		fmt.Fprintf(os.Stderr, "WARNING: Unknown return type %s, defaulting to i32\n", expr.ReturnType)
 		retType = types.I32
 	}
 
-	// Create parameter types
+	// Ensure function type is created with correct signature
 	paramTypes := make([]types.Type, len(expr.Parameters))
 	for i := range paramTypes {
-		paramTypes[i] = types.I32 // Default to i32 for parameters
+		paramTypes[i] = types.I32 // Default parameter type
 	}
 
-	// Create function type
 	funcType := types.NewFunc(retType, paramTypes...)
-	fmt.Fprintf(os.Stderr, "Function type created: %v\n", funcType)
 
-	// Create function
-	fn := g.module.NewFunc(funcName, funcType)
-	fmt.Fprintf(os.Stderr, "Created function %s with signature: %v\n", funcName, fn.Sig)
+	// Create function with the determined type
+	fn := g.module.NewFunc(expr.Name, funcType)
+	// fmt.Fprintf(os.Stderr, "Created function %s with signature: %v\n", funcName, fn.Sig)
 
 	// Save current context
 	oldContext := g.context
@@ -1493,7 +1489,7 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	// Generate body
 	bodyVal, err := g.generateStatement(expr.Body)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating body for function %s: %v\n", funcName, err)
+		fmt.Fprintf(os.Stderr, "Error generating body for function %s: %v\n", bodyVal, err)
 		g.context = oldContext
 		return nil, err
 	}
@@ -1638,8 +1634,8 @@ func fixFunctionDeclarations(ir string) string {
 			continue
 		}
 
-		// Fix global variable declarations with function pointers
 		fixedLine := line
+		// Fix global variable declarations with function pointers
 		if strings.HasPrefix(trimmedLine, "@") && strings.Contains(trimmedLine, "= global") {
 			fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)\*`).ReplaceAllString(fixedLine, "i32 (i32)*")
 			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 (i32)* ")
@@ -1647,10 +1643,10 @@ func fixFunctionDeclarations(ir string) string {
 
 		// Fix function definitions
 		if strings.HasPrefix(trimmedLine, "define ") {
-			fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)`).ReplaceAllString(fixedLine, "i32 (i32)")
+			fixedLine = regexp.MustCompile(`i32 \(i32\)\s*\(\)\*`).ReplaceAllString(fixedLine, "i32 (i32)") // Fix malformed signatures
+			fixedLine = regexp.MustCompile(`i32 \(i32\)\s*\((?:i32)?\)`).ReplaceAllString(fixedLine, "i32 (i32)")
 			fixedLine = strings.ReplaceAll(fixedLine, "i32 () ", "i32 ")
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32 (i32)")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 (i32) ")
 		}
 
 		result = append(result, fixedLine)
@@ -1780,4 +1776,12 @@ func removeDuplicateFunctionDefinitions(ir string) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+func normalizeReturnType(t types.Type) types.Type {
+	// Remove nested function type wrappers
+	if funcType, ok := t.(*types.FuncType); ok {
+		return funcType.RetType
+	}
+	return t
 }
