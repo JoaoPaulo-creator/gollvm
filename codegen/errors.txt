@@ -1,0 +1,436 @@
+go build .
+./compiler -input input.xyz -output input.ll -run
+Generate: Created main function, currentFunction: main
+Generate: Processing function declaration factorial, currentFunction: nil
+Generating var statement: factorial, currentFunction: <nil>
+Generating function literal: factorial
+Return Type:
+Number of Parameters: 1
+Parameter 0: n
+Function type created: i32 (i32)
+Created function factorial with signature: i32 (i32) ()
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Integer Literal: 1
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Identifier: factorial
+Generating identifier: factorial
+Found function: factorial
+Function type: i32 (i32) ()*
+Direct function call: factorial, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function factorial has invalid return type i32 (i32), defaulting to i32
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Call result type: i32 (i32)
+ERROR: Call result for factorial is a function type i32 (i32), defaulting to i32 0
+Value type: i32 (i32) ()*
+Function detected, using function pointer type: i32 (i32) ()*
+Handling global variable: factorial
+Global factorial initialized with constant: i32 (i32) ()* @factorial
+Generate: Restored currentFunction: main
+Generate: Processing function declaration fibonacci, currentFunction: nil
+Generating var statement: fibonacci, currentFunction: <nil>
+Generating function literal: fibonacci
+Return Type:
+Number of Parameters: 1
+Parameter 0: n
+Function type created: i32 (i32)
+Created function fibonacci with signature: i32 (i32) ()
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 0
+Integer Literal: 0
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Integer Literal: 1
+Identifier: fibonacci
+Generating identifier: fibonacci
+Found function: fibonacci
+Function type: i32 (i32) ()*
+Direct function call: fibonacci, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function fibonacci has invalid return type i32 (i32), defaulting to i32
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Call result type: i32 (i32)
+ERROR: Call result for fibonacci is a function type i32 (i32), defaulting to i32 0
+Identifier: fibonacci
+Generating identifier: fibonacci
+Found function: fibonacci
+Function type: i32 (i32) ()*
+Direct function call: fibonacci, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function fibonacci has invalid return type i32 (i32), defaulting to i32
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 2
+Call result type: i32 (i32)
+ERROR: Call result for fibonacci is a function type i32 (i32), defaulting to i32 0
+Value type: i32 (i32) ()*
+Function detected, using function pointer type: i32 (i32) ()*
+Handling global variable: fibonacci
+Global fibonacci initialized with constant: i32 (i32) ()* @fibonacci
+Generate: Restored currentFunction: main
+Generate: Processing function declaration sum, currentFunction: nil
+Generating var statement: sum, currentFunction: <nil>
+Generating function literal: sum
+Return Type:
+Number of Parameters: 1
+Parameter 0: n
+Function type created: i32 (i32)
+Created function sum with signature: i32 (i32) ()
+Generating var statement: total, currentFunction: i32 (i32) ()* @sum
+Integer Literal: 0
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: total
+Generating var statement: i, currentFunction: i32 (i32) ()* @sum
+Integer Literal: 1
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: i
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: n
+Generating identifier: n
+Value type: i32*
+Pointer element type: i32
+Identifier: total
+Generating identifier: total
+Value type: i32*
+Pointer element type: i32
+Identifier: total
+Generating identifier: total
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Identifier: total
+Generating identifier: total
+Value type: i32*
+Pointer element type: i32
+Value type: i32 (i32) ()*
+Function detected, using function pointer type: i32 (i32) ()*
+Handling global variable: sum
+Global sum initialized with constant: i32 (i32) ()* @sum
+Generate: Restored currentFunction: main
+Generate: Processing function declaration findFirstMultipleOf7, currentFunction: nil
+Generating var statement: findFirstMultipleOf7, currentFunction: <nil>
+Generating function literal: findFirstMultipleOf7
+Return Type:
+Number of Parameters: 1
+Parameter 0: max
+Function type created: i32 (i32)
+Created function findFirstMultipleOf7 with signature: i32 (i32) ()
+Generating var statement: i, currentFunction: i32 (i32) ()* @findFirstMultipleOf7
+Integer Literal: 1
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: i
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: max
+Generating identifier: max
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 7
+Integer Literal: 0
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Identifier: i
+Generating identifier: i
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 1
+Integer Literal: 0
+Value type: i32 (i32) ()*
+Function detected, using function pointer type: i32 (i32) ()*
+Handling global variable: findFirstMultipleOf7
+Global findFirstMultipleOf7 initialized with constant: i32 (i32) ()* @findFirstMultipleOf7
+Generate: Restored currentFunction: main
+Generate: Skipping function variable factorial in main processing
+Generate: Skipping function variable fibonacci in main processing
+Generate: Skipping function variable sum in main processing
+Generate: Processing statement 3, currentFunction: main
+Generating var statement: x, currentFunction: i32 ()* @main
+Integer Literal: 5
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: x
+Generate: Processing statement 4, currentFunction: main
+Generating var statement: y, currentFunction: i32 ()* @main
+Integer Literal: 10
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: y
+Generate: Processing statement 5, currentFunction: main
+Generating var statement: z, currentFunction: i32 ()* @main
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: z
+Generate: Processing statement 6, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 7, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: factorial
+Generating identifier: factorial
+Found function: factorial
+Function type: i32 (i32) ()*
+Direct function call: factorial, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function factorial has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 5
+Call result type: i32 (i32)
+ERROR: Call result for factorial is a function type i32 (i32), defaulting to i32 0
+Identifier: factorial
+Generating identifier: factorial
+Found function: factorial
+Function type: i32 (i32) ()*
+Direct function call: factorial, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function factorial has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 5
+Call result type: i32 (i32)
+ERROR: Call result for factorial is a function type i32 (i32), defaulting to i32 0
+Call expression result type: i32
+Print value type: i32
+Generate: Processing statement 8, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 9, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: fibonacci
+Generating identifier: fibonacci
+Found function: fibonacci
+Function type: i32 (i32) ()*
+Direct function call: fibonacci, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function fibonacci has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 10
+Call result type: i32 (i32)
+ERROR: Call result for fibonacci is a function type i32 (i32), defaulting to i32 0
+Identifier: fibonacci
+Generating identifier: fibonacci
+Found function: fibonacci
+Function type: i32 (i32) ()*
+Direct function call: fibonacci, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function fibonacci has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 10
+Call result type: i32 (i32)
+ERROR: Call result for fibonacci is a function type i32 (i32), defaulting to i32 0
+Call expression result type: i32
+Print value type: i32
+Generate: Processing statement 10, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 11, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: sum
+Generating identifier: sum
+Found function: sum
+Function type: i32 (i32) ()*
+Direct function call: sum, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function sum has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 100
+Call result type: i32 (i32)
+ERROR: Call result for sum is a function type i32 (i32), defaulting to i32 0
+Identifier: sum
+Generating identifier: sum
+Found function: sum
+Function type: i32 (i32) ()*
+Direct function call: sum, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function sum has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 100
+Call result type: i32 (i32)
+ERROR: Call result for sum is a function type i32 (i32), defaulting to i32 0
+Call expression result type: i32
+Print value type: i32
+Generate: Processing statement 12, currentFunction: main
+Generating var statement: result, currentFunction: i32 ()* @main
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Identifier: z
+Generating identifier: z
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 5
+Value type: i32
+Non-pointer type detected: i32
+Handling local variable: result
+Generate: Processing statement 13, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 14, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: result
+Generating identifier: result
+Value type: i32*
+Pointer element type: i32
+Non-call expression type: i32
+Print value type: i32
+Generate: Processing statement 15, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 16, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 17, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Non-call expression type: i1
+Print value type: i1
+Generate: Processing statement 18, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Non-call expression type: i1
+Print value type: i1
+Generate: Processing statement 19, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 5
+Non-call expression type: i1
+Print value type: i1
+Generate: Processing statement 20, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 10
+Non-call expression type: i1
+Print value type: i1
+Generate: Processing statement 21, currentFunction: main
+Generating print statement, currentFunction: main, block: entry
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 22, currentFunction: main
+Identifier: x
+Generating identifier: x
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 10
+Identifier: y
+Generating identifier: y
+Value type: i32*
+Pointer element type: i32
+Integer Literal: 5
+Generating print statement, currentFunction: main, block: if.else.19
+Non-call expression type: i8*
+Print value type: i8*
+Generating print statement, currentFunction: main, block: if.else.19
+Non-call expression type: i8*
+Print value type: i8*
+Generating print statement, currentFunction: main, block: if.else.19
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Skipping function variable findFirstMultipleOf7 in main processing
+Generate: Processing statement 24, currentFunction: main
+Generating print statement, currentFunction: main, block: if.else.19
+Non-call expression type: i8*
+Print value type: i8*
+Generate: Processing statement 25, currentFunction: main
+Generating print statement, currentFunction: main, block: if.else.19
+Identifier: findFirstMultipleOf7
+Generating identifier: findFirstMultipleOf7
+Found function: findFirstMultipleOf7
+Function type: i32 (i32) ()*
+Direct function call: findFirstMultipleOf7, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function findFirstMultipleOf7 has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 20
+Call result type: i32 (i32)
+ERROR: Call result for findFirstMultipleOf7 is a function type i32 (i32), defaulting to i32 0
+Identifier: findFirstMultipleOf7
+Generating identifier: findFirstMultipleOf7
+Found function: findFirstMultipleOf7
+Function type: i32 (i32) ()*
+Direct function call: findFirstMultipleOf7, signature: i32 (i32) (), return type: i32 (i32)
+WARNING: Function findFirstMultipleOf7 has invalid return type i32 (i32), defaulting to i32
+Integer Literal: 20
+Call result type: i32 (i32)
+ERROR: Call result for findFirstMultipleOf7 is a function type i32 (i32), defaulting to i32 0
+Call expression result type: i32
+Print value type: i32
+Successfully compiled input.xyz to input.ll
+Running the compiled program:
+lli: lli: input.ll:51:22: error: invalid function return type
+        %4 = call i32 (i8*) (...) @printf(i8* %3, i8* getelementptr ([23 x i8], [23 x i8]* @.str.0, i64 0, i64 0))
+                            ^
+
+Error running compiled program: exit status 1

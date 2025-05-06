@@ -396,13 +396,13 @@ func (g *Generator) ensureType(val value.Value, expectedType types.Type) value.V
 	// Handle common type conversions
 	switch {
 	case types.IsInt(val.Type()) && types.IsInt(expectedType):
-		return currentBlock.NewBitCast(val, expectedType)
+		return currentBlock.NewTrunc(val, expectedType)
 	case types.IsPointer(val.Type()) && types.IsInt(expectedType):
 		return currentBlock.NewPtrToInt(val, expectedType)
 	case types.IsInt(val.Type()) && types.IsPointer(expectedType):
 		return currentBlock.NewIntToPtr(val, expectedType)
 	default:
-		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type conversion from %v to %v\n",
+		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type conversion from %v to %v, returning original value\n",
 			val.Type(), expectedType)
 		return val
 	}
@@ -585,7 +585,11 @@ func (g *Generator) generateVarStatement(stmt *ast.VarStatement) (value.Value, e
 		global := g.module.NewGlobal(stmt.Name.Value, allocType)
 
 		// Try to use constant initialization if possible
-		if constVal, ok := val.(constant.Constant); ok {
+		if funcVal, ok := val.(*ir.Func); ok {
+			// For functions, initialize with the function pointer
+			global.Init = funcVal
+			fmt.Fprintf(os.Stderr, "Global %s initialized with function: %v\n", stmt.Name.Value, funcVal.Name())
+		} else if constVal, ok := val.(constant.Constant); ok {
 			global.Init = constVal
 			fmt.Fprintf(os.Stderr, "Global %s initialized with constant: %v\n", stmt.Name.Value, constVal)
 		} else {
@@ -673,6 +677,12 @@ func (g *Generator) generateReturnStatement(stmt *ast.ReturnStatement) (value.Va
 
 	// Get current block
 	currentBlock := g.getCurrentBlock()
+
+	// Ensure the return value is not a function type
+	if _, isFunc := val.Type().(*types.FuncType); isFunc {
+		fmt.Fprintf(os.Stderr, "WARNING: Return value is a function type, defaulting to i32 0\n")
+		val = constant.NewInt(types.I32, 0)
+	}
 
 	// Generate return instruction
 	currentBlock.NewRet(val)
@@ -888,6 +898,9 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 		} else if _, isFunc := callResult.Type().(*types.FuncType); isFunc {
 			fmt.Fprintf(os.Stderr, "WARNING: Call expression returned function type, defaulting to i32 0\n")
 			printVal = constant.NewInt(types.I32, 0)
+		} else if ptrType, ok := callResult.Type().(*types.PointerType); ok && types.IsFunc(ptrType.ElemType) {
+			fmt.Fprintf(os.Stderr, "WARNING: Call result is a function pointer, defaulting to i32 0\n")
+			printVal = constant.NewInt(types.I32, 0)
 		} else {
 			printVal = callResult
 		}
@@ -912,26 +925,18 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 		} else if _, isFunc := valType.ElemType.(*types.FuncType); isFunc {
 			fmt.Fprintf(os.Stderr, "WARNING: Attempting to print function pointer type %v, converting to i32\n", valType)
 			formatStr = "%d\n"
-			// Convert function pointer to integer
 			printVal = currentBlock.NewPtrToInt(printVal, types.I32)
 		} else {
 			fmt.Fprintf(os.Stderr, "WARNING: Attempting to print pointer type %v, converting to i32\n", valType)
 			formatStr = "%d\n"
-			// Convert pointer to integer if needed
 			if !types.IsInt(printVal.Type()) {
 				printVal = currentBlock.NewPtrToInt(printVal, types.I32)
 			}
 		}
 	case *types.FuncType:
-		fmt.Fprintf(os.Stderr, "WARNING: Attempting to print function type %v, converting to i32\n", valType)
+		fmt.Fprintf(os.Stderr, "WARNING: Attempting to print function type %v, defaulting to i32 0\n", valType)
 		formatStr = "%d\n"
-		// Convert function type to integer
-		if ptrType, ok := printVal.(value.Value); ok && types.IsPointer(ptrType.Type()) {
-			printVal = currentBlock.NewPtrToInt(ptrType, types.I32)
-		} else {
-			// Fallback to zero
-			printVal = constant.NewInt(types.I32, 0)
-		}
+		printVal = constant.NewInt(types.I32, 0)
 	default:
 		fmt.Fprintf(os.Stderr, "WARNING: Unsupported type %v for print, defaulting to integer\n", printVal.Type())
 		formatStr = "%d\n"
@@ -953,6 +958,13 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 
 	if printfFn == nil {
 		return nil, fmt.Errorf("printf function not found")
+	}
+
+	// Ensure printf function has correct signature
+	if !printfFn.Sig.RetType.Equal(types.I32) || len(printfFn.Sig.Params) < 1 || !printfFn.Sig.Params[0].Equal(types.NewPointer(types.I8)) {
+		fmt.Fprintf(os.Stderr, "WARNING: Incorrect printf signature, redeclaring\n")
+		printfFn = declarePrintf(g.module)
+		g.printfFunc = printfFn
 	}
 
 	// Cast format string constant to the expected pointer type
@@ -979,7 +991,7 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Fprintf(os.Stderr, "PANIC in printf call: %v\n", r)
-				result = nil
+				result = constant.NewInt(types.I32, 0)
 			}
 		}()
 		result = currentBlock.NewCall(printfFn, formatStrPtr, printArg)
@@ -1093,22 +1105,12 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 	case *ir.Func:
 		fmt.Fprintf(os.Stderr, "Direct function call: %s, signature: %v, return type: %v\n", fn.Name(), fn.Sig, fn.Sig.RetType)
 		returnType = fn.Sig.RetType
-		// Validate and correct return type if it's a function type
-		if _, isFunc := returnType.(*types.FuncType); isFunc {
-			fmt.Fprintf(os.Stderr, "WARNING: Function %s has invalid return type %v, defaulting to i32\n", fn.Name(), returnType)
-			returnType = types.I32
-		}
 		callableFunction = fn
 	case value.Value:
 		if ptrType, ok := fn.Type().(*types.PointerType); ok {
 			if funcType, ok := ptrType.ElemType.(*types.FuncType); ok {
 				fmt.Fprintf(os.Stderr, "Function pointer call, return type: %v\n", funcType.RetType)
 				returnType = funcType.RetType
-				// Validate return type
-				if _, isFunc := returnType.(*types.FuncType); isFunc {
-					fmt.Fprintf(os.Stderr, "ERROR: Function pointer %s has invalid return type %v, defaulting to i32\n", expr.Function.String(), returnType)
-					returnType = types.I32
-				}
 				callableFunction = fn
 			} else {
 				fmt.Fprintf(os.Stderr, "ERROR: Attempted to call a non-function pointer: %v\n", ptrType.ElemType)
@@ -1123,9 +1125,9 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 		return constant.NewInt(types.I32, 0), nil
 	}
 
-	// Additional validation for return type
+	// Validate return type to prevent function type issues
 	if _, isFunc := returnType.(*types.FuncType); isFunc {
-		fmt.Fprintf(os.Stderr, "ERROR: Function call %s has invalid return type %v, defaulting to i32\n", expr.Function.String(), returnType)
+		fmt.Fprintf(os.Stderr, "WARNING: Return type is a function type, defaulting to i32\n")
 		returnType = types.I32
 	}
 
@@ -1173,10 +1175,6 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 	fmt.Fprintf(os.Stderr, "Call result type: %v\n", callResult.Type())
 
 	if returnType != nil && !returnType.Equal(types.Void) {
-		if _, isFunc := callResult.Type().(*types.FuncType); isFunc {
-			fmt.Fprintf(os.Stderr, "ERROR: Call result for %s is a function type %v, defaulting to i32 0\n", expr.Function.String(), callResult.Type())
-			return constant.NewInt(types.I32, 0), nil
-		}
 		if !callResult.Type().Equal(returnType) {
 			fmt.Fprintf(os.Stderr, "WARNING: Call result type %v does not match expected return type %v, attempting conversion\n", callResult.Type(), returnType)
 			callResult = g.ensureType(callResult, returnType)
@@ -1328,12 +1326,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		retType = types.I32
 	}
 
-	// Validate return type to ensure it's not a function type
-	if _, isFunc := retType.(*types.FuncType); isFunc {
-		fmt.Fprintf(os.Stderr, "ERROR: Return type for function %s is invalid (function type %v), defaulting to i32\n", funcName, retType)
-		retType = types.I32
-	}
-
 	// Create parameter types
 	paramTypes := make([]types.Type, len(expr.Parameters))
 	for i := range paramTypes {
@@ -1344,21 +1336,9 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 	funcType := types.NewFunc(retType, paramTypes...)
 	fmt.Fprintf(os.Stderr, "Function type created: %v\n", funcType)
 
-	// Validate function type
-	if _, isFunc := funcType.RetType.(*types.FuncType); isFunc {
-		fmt.Fprintf(os.Stderr, "ERROR: Created invalid function type %v for %s, correcting to i32\n", funcType, funcName)
-		funcType = types.NewFunc(types.I32, paramTypes...)
-	}
-
 	// Create function
 	fn := g.module.NewFunc(funcName, funcType)
 	fmt.Fprintf(os.Stderr, "Created function %s with signature: %v\n", funcName, fn.Sig)
-
-	// Verify and correct function signature
-	if fn.Sig.String() != funcType.String() {
-		fmt.Fprintf(os.Stderr, "WARNING: Function %s signature mismatch, expected %v, got %v, correcting\n", funcName, funcType, fn.Sig)
-		fn.Sig = funcType
-	}
 
 	// Save current context
 	oldContext := g.context
@@ -1431,12 +1411,6 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 		default:
 			entryBlock.NewRet(constant.NewInt(types.I32, 0))
 		}
-	}
-
-	// Final validation of function signature
-	if _, isFunc := fn.Sig.RetType.(*types.FuncType); isFunc {
-		fmt.Fprintf(os.Stderr, "ERROR: Function %s has invalid return type %v after creation, correcting to i32\n", funcName, fn.Sig.RetType)
-		fn.Sig = types.NewFunc(types.I32, paramTypes...)
 	}
 
 	// Restore context
@@ -1546,20 +1520,16 @@ func fixFunctionDeclarations(ir string) string {
 		// Fix global variable declarations with function pointers
 		fixedLine := line
 		if strings.HasPrefix(trimmedLine, "@") && strings.Contains(trimmedLine, "= global") {
-			if strings.Contains(trimmedLine, "i32 (i32) ()*") {
-				fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32 (i32)*")
-			}
-			if strings.Contains(trimmedLine, "i32 (i32)") && !strings.Contains(trimmedLine, "i32 (i32)*") {
-				fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32)", "i32 (i32)*")
-			}
+			fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)\*`).ReplaceAllString(fixedLine, "i32 (i32)*")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 (i32)* ")
 		}
 
 		// Fix function definitions
 		if strings.HasPrefix(trimmedLine, "define ") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) () ", "i32 (i32) ")
+			fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)`).ReplaceAllString(fixedLine, "i32 (i32)")
 			fixedLine = strings.ReplaceAll(fixedLine, "i32 () ", "i32 ")
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")        // Fix malformed return types
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()", "i32 (i32)") // Fix specific malformed signature
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32 (i32)")
 		}
 
 		result = append(result, fixedLine)
@@ -1583,9 +1553,15 @@ func fixFunctionPointerUsage(ir string) string {
 		// Fix load instructions for function pointers
 		fixedLine := line
 		if strings.Contains(trimmedLine, "= load") && strings.Contains(trimmedLine, "i32 (i32)") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32), i32 (i32)*", "i32 (i32)*, i32 (i32)**")
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*, i32 (i32) ()**", "i32 (i32)*, i32 (i32)**")
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()", "i32 (i32)") // Fix specific malformed type
+			fixedLine = regexp.MustCompile(`i32 \(i32\), i32 \(i32\)\*`).ReplaceAllString(fixedLine, "i32 (i32)*, i32 (i32)**")
+			fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)\*, i32 \(i32\) \((?:i32)?\)\*\*`).ReplaceAllString(fixedLine, "i32 (i32)*, i32 (i32)**")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32 (i32)")
+		}
+
+		// Fix call instructions
+		if strings.Contains(trimmedLine, "= call") && strings.Contains(trimmedLine, "i32 (i32)") {
+			fixedLine = regexp.MustCompile(`call i32 \(i32\)`).ReplaceAllString(fixedLine, "call i32")
+			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32")
 		}
 
 		result = append(result, fixedLine)
@@ -1608,44 +1584,19 @@ func fixFunctionTypeUsage(ir string) string {
 
 		// Fix function types with extraneous ()*
 		fixedLine := line
-		if strings.Contains(trimmedLine, "i32 (i32) ()*") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32 (i32)*")
-		}
-		if strings.Contains(trimmedLine, "i32 ()*") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 ()*", "i32")
-		}
-		// Fix standalone i32 (i32) in call instructions or return types
-		if strings.Contains(trimmedLine, "i32 (i32)") && !strings.Contains(trimmedLine, "i32 (i32)*") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32)", "i32")
-		}
-		// Fix call instructions with incorrect return types
-		if strings.Contains(trimmedLine, "= call i32 (i32)") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32)", "i32")
-		}
-		// Fix function signatures with extraneous () in definitions
-		if strings.Contains(trimmedLine, "i32 (i32) () ") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) () ", "i32 (i32) ")
-		}
-		// Fix incorrect return type references
-		if strings.Contains(trimmedLine, "i32 (i32) ") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")
-		}
-		// Fix call instructions with malformed variadic types
-		if strings.Contains(trimmedLine, "i32 (i32) (...)") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) (...)", "i32 (...)")
-		}
-		// Fix load instructions with incorrect function types
-		if strings.Contains(trimmedLine, "= load i32 (i32)") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32)", "i32")
-		}
-		// Fix alloca instructions with incorrect function types
-		if strings.Contains(trimmedLine, "= alloca i32 (i32)") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32)", "i32")
-		}
-		// Fix specific malformed function type i32 (i32) ()
-		if strings.Contains(trimmedLine, "i32 (i32) ()") {
-			fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()", "i32 (i32)")
-		}
+		fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)\*`).ReplaceAllString(fixedLine, "i32 (i32)*")
+		fixedLine = strings.ReplaceAll(fixedLine, "i32 ()*", "i32")
+		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")
+		fixedLine = regexp.MustCompile(`call i32 \(i32\)`).ReplaceAllString(fixedLine, "call i32")
+		fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)`).ReplaceAllString(fixedLine, "i32 (i32)")
+		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) (...)", "i32 (...)")
+		fixedLine = strings.ReplaceAll(fixedLine, "= load i32 (i32)", "= load i32")
+		fixedLine = strings.ReplaceAll(fixedLine, "= alloca i32 (i32)", "= alloca i32")
+		fixedLine = regexp.MustCompile(`i32 \(i32\), i32 \(i32\)\*`).ReplaceAllString(fixedLine, "i32, i32*")
+		fixedLine = regexp.MustCompile(`store i32 \(i32\)`).ReplaceAllString(fixedLine, "store i32")
+		fixedLine = regexp.MustCompile(`ret i32 \(i32\)`).ReplaceAllString(fixedLine, "ret i32")
+		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32")
+		fixedLine = regexp.MustCompile(`i32 \(i32\)`).ReplaceAllString(fixedLine, "i32")
 
 		result = append(result, fixedLine)
 	}
@@ -1665,7 +1616,7 @@ func removeDuplicateFunctionDefinitions(ir string) string {
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
+		if strings.HasPrefix(trimmedLine, "define l") && strings.Contains(trimmedLine, "@") {
 			if inFunction {
 				if !seenFunctions[currentFunction] {
 					result = append(result, functionLines...)
