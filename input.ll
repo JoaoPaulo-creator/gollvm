@@ -1,7 +1,7 @@
-@factorial = global i32* @factorial
-@fibonacci = global i32* @fibonacci
-@sum = global i32* @sum
-@findFirstMultipleOf7 = global i32* @findFirstMultipleOf7
+@factorial = global i32 (i32)* @factorial
+@fibonacci = global i32 (i32)* @fibonacci
+@sum = global i32 (i32)* @sum
+@findFirstMultipleOf7 = global i32 (i32)* @findFirstMultipleOf7
 @.str.0 = global [23 x i8] c"Factorial calculation:\00"
 @.str.1 = global [4 x i8] c"%s\0A\00"
 @.str.2 = global [4 x i8] c"%d\0A\00"
@@ -18,8 +18,6 @@
 @.str.13 = global [25 x i8] c"First condition is false\00"
 @.str.14 = global [4 x i8] c"%s\0A\00"
 @.str.15 = global [21 x i8] c"First multiple of 7:\00"
-
-declare i32 @printf(i8*, ...)
 
 declare i8* @malloc(i64)
 
@@ -184,7 +182,7 @@ if.merge.5:
 	%7 = load i32, i32* %n
 	%8 = sub i32 %7, 2
 	%9 = call i32 @fibonacci(i32 %8)
-	%10 = add i32 %6, %9
+	%10 = add i32 (i32) %6, %9
 	ret i32 0
 }
 
@@ -252,44 +250,6 @@ if.merge.13:
 	%9 = add i32 %8, 1
 	ret i32 0
 }
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
-
-declare i32 @printf(i8*, ...)
 
 declare i32 @printf(i8*, ...)
 

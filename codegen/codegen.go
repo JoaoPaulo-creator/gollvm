@@ -9,6 +9,7 @@ import (
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -79,8 +80,29 @@ func (c *Context) Lookup(name string) (value.Value, bool) {
 	return nil, false
 }
 
+func fixPrintfCalls(ir string) string {
+	lines := strings.Split(ir, "\n")
+	result := make([]string, 0, len(lines))
+
+	re := regexp.MustCompile(`(call\s+i32\s+)\([^\)]*\)\s*\(\.\.\.\)\s*(@printf\()([^\)]*\))`)
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "%") && strings.Contains(trimmedLine, "= call") && strings.Contains(trimmedLine, "@printf") {
+			fixedLine := re.ReplaceAllString(line, `$1(i8*, ...) $2$3`)
+			if fixedLine != line {
+				fmt.Fprintf(os.Stderr, "Fixed printf call: %s\n", fixedLine)
+			}
+			result = append(result, fixedLine)
+			continue
+		}
+		result = append(result, line)
+	}
+
+	return strings.Join(result, "\n")
+}
+
 func declarePrintf(module *ir.Module) *ir.Func {
-	// Declare printf: int printf(const char*, ...)
 	paramTypes := []types.Type{types.NewPointer(types.I8)}
 	printfType := types.NewFunc(types.I32, paramTypes...)
 	fn := module.NewFunc("printf", printfType)
@@ -501,6 +523,81 @@ func CompileToLLVM(program *ast.Program) (string, error) {
 `
 	ir = ir + "\n" + formatStrings
 	return ir, nil
+}
+
+// CompileToExecutable compiles the AST to a native executable
+func (g *Generator) CompileToExecutable(program *ast.Program, outputFile string) error {
+	module, err := g.Generate(program)
+	if err != nil {
+		return fmt.Errorf("failed to generate LLVM IR: %w", err)
+	}
+
+	irFile := "temp.ll"
+	var buf strings.Builder
+	_, err = module.WriteTo(&buf)
+	if err != nil {
+		return fmt.Errorf("failed to write LLVM IR: %w", err)
+	}
+
+	ir := buf.String()
+	ir = fixPrintfDeclaration(ir)
+	ir = fixExternalFunctionDeclarations(ir)
+	ir = fixFunctionDeclarations(ir)
+	ir = fixFunctionPointerUsage(ir)
+	ir = fixFunctionTypeUsage(ir)
+	ir = removeDuplicateFunctionDefinitions(ir)
+	ir = fixPrintfCalls(ir) // Add the new fix here
+
+	// Add standard format strings
+	formatStrings := `
+; Standard format strings
+@.fmt.int = private constant [4 x i8] c"%d\0A\00"
+@.fmt.str = private constant [4 x i8] c"%s\0A\00"
+@.fmt.float = private constant [4 x i8] c"%f\0A\00"
+@.fmt.bool = private constant [4 x i8] c"%d\0A\00"
+`
+	ir = ir + "\n" + formatStrings
+
+	err = os.WriteFile(irFile, []byte(ir), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write IR to %s: %w", irFile, err)
+	}
+	fmt.Fprintf(os.Stderr, "Generated LLVM IR: %s\n", irFile)
+
+	ir = ir + "\n" + formatStrings
+
+	err = os.WriteFile(irFile, []byte(ir), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write IR to %s: %w", irFile, err)
+	}
+	fmt.Fprintf(os.Stderr, "Generated LLVM IR: %s\n", irFile)
+
+	// Step 2: Compile IR to object file
+	objFile := "temp.o"
+	cmd := exec.Command("llc", "-filetype=obj", irFile, "-o", objFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to compile IR to object file: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Generated object file: %s\n", objFile)
+
+	// Step 3: Link object file to executable
+	cmd = exec.Command("clang", objFile, "-o", outputFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to link object file to executable: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Generated executable: %s\n", outputFile)
+
+	// Clean up temporary files
+	os.Remove(irFile)
+	os.Remove(objFile)
+
+	return nil
 }
 
 func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression) (value.Value, error) {
@@ -962,7 +1059,9 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 
 	// Ensure printf function has correct signature
 	if !printfFn.Sig.RetType.Equal(types.I32) || len(printfFn.Sig.Params) < 1 || !printfFn.Sig.Params[0].Equal(types.NewPointer(types.I8)) {
-		fmt.Fprintf(os.Stderr, "WARNING: Incorrect printf signature, redeclaring\n")
+		fmt.Fprintf(os.Stderr, "WARNING: Incorrect printf signature detected, ensuring correct declaration\n")
+		// Remove existing printf declaration to avoid duplicates
+		g.module.Funcs = removeFunction(g.module.Funcs, "printf")
 		printfFn = declarePrintf(g.module)
 		g.printfFunc = printfFn
 	}
@@ -1003,6 +1102,17 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 	}
 
 	return result, nil
+}
+
+// removeFunction removes a function with the given name from the function list
+func removeFunction(funcs []*ir.Func, name string) []*ir.Func {
+	var result []*ir.Func
+	for _, fn := range funcs {
+		if fn.Name() != name {
+			result = append(result, fn)
+		}
+	}
+	return result
 }
 
 // getStringConstant gets or creates a string constant
@@ -1151,6 +1261,15 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 			continue
 		}
 
+		// Ensure argument type matches expected parameter type
+		if i < len(callableFunction.(*ir.Func).Sig.Params) {
+			expectedType := callableFunction.(*ir.Func).Sig.Params[i]
+			if !argVal.Type().Equal(expectedType) {
+				fmt.Fprintf(os.Stderr, "WARNING: Argument %d type %v does not match expected %v, attempting conversion\n", i, argVal.Type(), expectedType)
+				argVal = g.ensureType(argVal, expectedType)
+			}
+		}
+
 		args[i] = argVal
 	}
 
@@ -1187,6 +1306,7 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 
 // generateIntegerLiteral generates code for an integer literal
 func (g *Generator) generateIntegerLiteral(expr *ast.IntegerLiteral) (value.Value, error) {
+	fmt.Fprintf(os.Stderr, "Integer Literal: %d\n", expr.Value)
 	return constant.NewInt(types.I32, int64(expr.Value)), nil
 }
 
@@ -1430,13 +1550,14 @@ func (g *Generator) WriteToFile(filename string) error {
 	ir := buf.String()
 	fmt.Fprintf(os.Stderr, "IR before fixes:\n%s\n", ir)
 
-	// Apply fixes
+	// Apply existing fixes
 	ir = fixPrintfDeclaration(ir)
 	ir = fixExternalFunctionDeclarations(ir)
 	ir = fixFunctionDeclarations(ir)
 	ir = fixFunctionPointerUsage(ir)
 	ir = fixFunctionTypeUsage(ir)
 	ir = removeDuplicateFunctionDefinitions(ir)
+	ir = fixPrintfCalls(ir) // Add the new fix here
 
 	fmt.Fprintf(os.Stderr, "IR after fixes:\n%s\n", ir)
 	return os.WriteFile(filename, []byte(ir), 0644)
@@ -1582,21 +1703,22 @@ func fixFunctionTypeUsage(ir string) string {
 			continue
 		}
 
-		// Fix function types with extraneous ()*
+		// Fix function types carefully to preserve valid function signatures
 		fixedLine := line
-		fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)\*`).ReplaceAllString(fixedLine, "i32 (i32)*")
-		fixedLine = strings.ReplaceAll(fixedLine, "i32 ()*", "i32")
-		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ", "i32 ")
-		fixedLine = regexp.MustCompile(`call i32 \(i32\)`).ReplaceAllString(fixedLine, "call i32")
-		fixedLine = regexp.MustCompile(`i32 \(i32\) \((?:i32)?\)`).ReplaceAllString(fixedLine, "i32 (i32)")
-		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) (...)", "i32 (...)")
-		fixedLine = strings.ReplaceAll(fixedLine, "= load i32 (i32)", "= load i32")
-		fixedLine = strings.ReplaceAll(fixedLine, "= alloca i32 (i32)", "= alloca i32")
-		fixedLine = regexp.MustCompile(`i32 \(i32\), i32 \(i32\)\*`).ReplaceAllString(fixedLine, "i32, i32*")
-		fixedLine = regexp.MustCompile(`store i32 \(i32\)`).ReplaceAllString(fixedLine, "store i32")
-		fixedLine = regexp.MustCompile(`ret i32 \(i32\)`).ReplaceAllString(fixedLine, "ret i32")
-		fixedLine = strings.ReplaceAll(fixedLine, "i32 (i32) ()*", "i32")
-		fixedLine = regexp.MustCompile(`i32 \(i32\)`).ReplaceAllString(fixedLine, "i32")
+		// Only replace erroneous function types in specific contexts
+		if strings.Contains(trimmedLine, "= load") {
+			fixedLine = regexp.MustCompile(`i32 \(i32\), i32 \(i32\)\*`).ReplaceAllString(fixedLine, "i32, i32*")
+			fixedLine = strings.ReplaceAll(fixedLine, "= load i32 (i32)", "= load i32")
+		}
+		if strings.Contains(trimmedLine, "= alloca") {
+			fixedLine = strings.ReplaceAll(fixedLine, "= alloca i32 (i32)", "= alloca i32")
+		}
+		if strings.Contains(trimmedLine, "= store") {
+			fixedLine = regexp.MustCompile(`store i32 \(i32\)`).ReplaceAllString(fixedLine, "store i32")
+		}
+		if strings.Contains(trimmedLine, "= ret") {
+			fixedLine = regexp.MustCompile(`ret i32 \(i32\)`).ReplaceAllString(fixedLine, "ret i32")
+		}
 
 		result = append(result, fixedLine)
 	}
@@ -1616,7 +1738,7 @@ func removeDuplicateFunctionDefinitions(ir string) string {
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmedLine, "define l") && strings.Contains(trimmedLine, "@") {
+		if strings.HasPrefix(trimmedLine, "define ") && strings.Contains(trimmedLine, "@") {
 			if inFunction {
 				if !seenFunctions[currentFunction] {
 					result = append(result, functionLines...)
