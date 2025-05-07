@@ -339,7 +339,7 @@ func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Valu
 	printfFn.Sig = printfType
 	printfFn.Sig.Variadic = true
 
-	result := currentBlock.NewCall(printfFn, formatStrConst, printVal)
+	result := currentBlock.NewCall(g.printfFunc, formatStrConst, printVal)
 	return result, nil
 }
 
@@ -1005,15 +1005,15 @@ func fixFunctionDeclarations(ir string) string {
 		return "define i32 @main() {"
 	})
 
-	// Fix printf call signatures
-	ir = regexp.MustCompile(`call\s+i32\s*\([^)]*\)\s*@printf`).ReplaceAllString(ir, "call i32 @printf")
+	ir = regexp.MustCompile(`call\s+i32\s*\([^)]*\)\s*@printf`).ReplaceAllString(ir, "call i32 @printf(i8*, ...)")
 
 	// Fix getelementptr instructions for printf calls
 	ir = regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "getelementptr [$1 x i8], [$1 x i8]*")
 	ir = regexp.MustCompile(`i8\*\s*getelementptr\(\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "i8* getelementptr([$1 x i8], [$1 x i8]*")
 
 	// Convert array types to pointer types in printf calls
-	ir = regexp.MustCompile(`\[(\d+\s+x\s+i8)\]\*\s*(@\.str\.\d+)`).ReplaceAllString(ir, `i8* getelementptr([$1], [$1]* $2, i64 0, i64 0)`)
+	// ir = regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*\[(\d+)\s+x\s+i8\]\*\s*(@\.str\.\d+)`).
+	// 	ReplaceAllString(ir, `getelementptr inbounds ([$1 x i8], [$2 x i8]* $3, i64 0, i64 0)`)
 
 	badFuncPattern := regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)`)
 	matches := badFuncPattern.FindAllString(ir, -1)
@@ -1031,6 +1031,11 @@ func fixFunctionDeclarations(ir string) string {
 		}
 		return s
 	})
+
+	// before your existing hack, insert something like:
+	re := regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*\[\d+\s+x\s+i8\]\*\s*(@\.str\.\d+),\s*i64\s+0,\s*i64\s+0`)
+	ir = re.ReplaceAllString(ir,
+		`getelementptr inbounds ([$1 x i8], [$1 x i8]* $2, i64 0, i64 0)`)
 
 	// HACK: NÃO MEXER PELO AMOR DE DEUS
 	ir = regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)\s*\(\)\s*\{`).
