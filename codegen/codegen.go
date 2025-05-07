@@ -81,9 +81,16 @@ func (c *Context) Lookup(name string) (value.Value, bool) {
 }
 
 func declarePrintf(module *ir.Module) *ir.Func {
+	// Create printf type: i32 (i8*, ...)
 	printfType := types.NewFunc(types.I32, types.NewPointer(types.I8))
 	fn := module.NewFunc("printf", printfType)
+	fn.Linkage = enum.LinkageExternal
 	fn.Sig.Variadic = true
+
+	// Add metadata to indicate this is a C varargs function
+	fn.CallingConv = enum.CallingConvC
+
+	// Name the format parameter
 	if len(fn.Params) > 0 {
 		fn.Params[0].SetName("format")
 	}
@@ -786,7 +793,8 @@ func (g *Generator) generateFunctionLiteral(expr *ast.FunctionLiteral) (value.Va
 
 	for i, param := range expr.Parameters {
 		paramAlloca := entryBlock.NewAlloca(types.I32)
-		paramAlloca.SetName(param.Value)
+		paramAlloca.SetName(param.Value + ".addr") // fix the multiple definition of local value named 'n' error %n = alloca i32
+
 		if i < len(fn.Params) {
 			entryBlock.NewStore(fn.Params[i], paramAlloca)
 		} else {
@@ -982,6 +990,9 @@ declare void @exit(i32)
 func fixFunctionDeclarations(ir string) string {
 	fmt.Fprintf(os.Stderr, "DEBUG: Initial IR before adding standard declarations:\n%s\n", ir)
 
+	// Remove any existing function declarations
+	ir = regexp.MustCompile(`declare\s+(?:external\s+)?(?:ccc\s+)?[^@]+@(?:printf|malloc|free|strlen|strcpy|abs|pow|exit)\(.*\)`).ReplaceAllString(ir, "")
+
 	// Add standard function declarations at the top
 	ir = getStandardFunctionDeclarations() + "\n" + ir
 
@@ -994,24 +1005,21 @@ func fixFunctionDeclarations(ir string) string {
 		return "define i32 @main() {"
 	})
 
-	// Remove any duplicate function declarations with incorrect signatures
-	ir = regexp.MustCompile(`declare\s+i32\s+@printf\(\.\.\.\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+i8\*\s+\(i64\)\s+@malloc\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+void\s+\(i8\*\)\s+@free\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+i64\s+\(i8\*\)\s+@strlen\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+i8\*\s+\(i8\*,\s*i8\*\)\s+@strcpy\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+i32\s+\(i32\)\s+@abs\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+double\s+\(double,\s*double\)\s+@pow\(\)`).ReplaceAllString(ir, "")
-	ir = regexp.MustCompile(`declare\s+void\s+\(i32\)\s+@exit\(\)`).ReplaceAllString(ir, "")
-
-	// Fix function return types
-	ir = regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)`).ReplaceAllString(ir, "define i32 @$1")
+	// Fix printf call signatures
+	ir = regexp.MustCompile(`call\s+i32\s*\([^)]*\)\s*@printf`).ReplaceAllString(ir, "call i32 @printf")
 
 	// Fix getelementptr instructions for printf calls
 	ir = regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "getelementptr [$1 x i8], [$1 x i8]*")
+	ir = regexp.MustCompile(`i8\*\s*getelementptr\(\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "i8* getelementptr([$1 x i8], [$1 x i8]*")
 
 	// Convert array types to pointer types in printf calls
 	ir = regexp.MustCompile(`\[(\d+\s+x\s+i8)\]\*\s*(@\.str\.\d+)`).ReplaceAllString(ir, `i8* getelementptr([$1], [$1]* $2, i64 0, i64 0)`)
+
+	badFuncPattern := regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)`)
+	matches := badFuncPattern.FindAllString(ir, -1)
+	for _, m := range matches {
+		fmt.Fprintf(os.Stderr, "ERROR: Invalid function definition: %s\n", m)
+	}
 
 	// Fix string constant declarations
 	ir = regexp.MustCompile(`@\.str\.[0-9]+ = .*c"([^"]*)".*`).ReplaceAllStringFunc(ir, func(s string) string {
@@ -1023,6 +1031,17 @@ func fixFunctionDeclarations(ir string) string {
 		}
 		return s
 	})
+
+	// HACK: NÃO MEXER PELO AMOR DE DEUS
+	ir = regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)\s*\(\)\s*\{`).
+		ReplaceAllString(ir, "define i32 @$1(i32 %n) {")
+	ir = regexp.MustCompile(`declare\s+i8\*\s+\(i64\)\s+@malloc\(\)`).ReplaceAllString(ir, "declare i8* @malloc(i64)")
+	ir = regexp.MustCompile(`declare\s+void\s+\(i8\*\)\s+@free\(\)`).ReplaceAllString(ir, "declare void @free(i8*)")
+	ir = regexp.MustCompile(`declare\s+i64\s+\(i8\*\)\s+@strlen\(\)`).ReplaceAllString(ir, "declare i64 @strlen(i8*)")
+	ir = regexp.MustCompile(`declare\s+i8\*\s+\(i8\*,\s*i8\*\)\s+@strcpy\(\)`).ReplaceAllString(ir, "declare i8* @strcpy(i8*, i8*)")
+	ir = regexp.MustCompile(`declare\s+i32\s+\(i32\)\s+@abs\(\)`).ReplaceAllString(ir, "declare i32 @abs(i32)")
+	ir = regexp.MustCompile(`declare\s+double\s+\(double,\s*double\)\s+@pow\(\)`).ReplaceAllString(ir, "declare double @pow(double, double)")
+	ir = regexp.MustCompile(`declare\s+void\s+\(i32\)\s+@exit\(\)`).ReplaceAllString(ir, "declare void @exit(i32)")
 
 	fmt.Fprintf(os.Stderr, "DEBUG: Final IR after all fixes:\n%s\n", ir)
 

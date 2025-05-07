@@ -86,14 +86,11 @@ func compile(source string) (string, error) {
 	return llvmIR, nil
 }
 
-// compileIRToExecutable compiles LLVM IR to an executable
 func compileIRToExecutable(irFile, outputFile string) error {
-	// Use clang to compile the LLVM IR to an executable
-	cmd := exec.Command("clang", irFile, "-o", outputFile)
+	cmd := exec.Command("clang", "-Wno-varargs", irFile, "-o", outputFile)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("clang error: %v\n%s", err, output)
 	}
-
 	return nil
 }
