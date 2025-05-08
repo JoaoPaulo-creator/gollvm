@@ -268,79 +268,63 @@ func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error)
 }
 
 func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Value, error) {
-	if g.context.currentFunction == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: No current function when generating print statement\n")
-		return constant.NewInt(types.I32, 0), nil
+	// Ensure we’re inside a function
+	fn := g.context.currentFunction
+	if fn == nil {
+		return nil, fmt.Errorf("generatePrintStatement: no current function")
 	}
-
-	if len(g.context.currentFunction.Blocks) == 0 {
-		fmt.Fprintf(os.Stderr, "ERROR: Function has no blocks when generating print statement\n")
-		entryBlock := g.context.currentFunction.NewBlock("entry")
-		g.context.blocks["entry"] = entryBlock
+	// Ensure there’s at least one block
+	blocks := fn.Blocks
+	if len(blocks) == 0 {
+		entry := fn.NewBlock("entry")
+		g.context.blocks["entry"] = entry
+		blocks = fn.Blocks
 	}
+	current := blocks[len(blocks)-1]
 
+	// Evaluate the expression to print
 	val, err := g.generateExpression(stmt.Value)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to generate value for print statement: %v\n", err)
-		return nil, err
+		return nil, fmt.Errorf("generatePrintStatement: %w", err)
 	}
 
-	if val == nil {
-		fmt.Fprintf(os.Stderr, "WARNING: Print expression evaluated to nil\n")
-		val = constant.NewInt(types.I32, 0)
-	}
-
-	currentBlock := g.context.currentFunction.Blocks[len(g.context.currentFunction.Blocks)-1]
-
+	// Choose format string and possibly adjust value
 	var formatStr string
-	var printVal value.Value
+	var arg value.Value
 
-	switch val.Type().(type) {
-	case *types.PointerType:
-		pointerType, ok := val.Type().(*types.PointerType)
-		if !ok || pointerType.ElemType == nil {
-			return nil, fmt.Errorf("invalid pointer type: %s", val.Type())
-		}
-		if pointerType.ElemType.Equal(types.I8) {
-			formatStr = "%s"
-			printVal = val
-		} else if _, ok := pointerType.ElemType.(*types.FuncType); ok {
-			formatStr = "<function>"
-			printVal = g.getStringConstant("<function>")
-		} else {
-			return nil, fmt.Errorf("unsupported pointer type for print: %s", val.Type())
-		}
+	switch t := val.Type().(type) {
 	case *types.IntType:
-		if val.Type().Equal(types.I1) {
+		// bools are i1, ints are i32
+		if t.Equal(types.I1) {
 			formatStr = "%d\n"
-			printVal = currentBlock.NewZExt(val, types.I32)
-		} else if val.Type().Equal(types.I32) {
+			arg = current.NewZExt(val, types.I32)
+		} else if t.Equal(types.I32) {
 			formatStr = "%d\n"
-			printVal = val
+			arg = val
 		} else {
-			return nil, fmt.Errorf("unsupported integer type for print: %s", val.Type())
+			return nil, fmt.Errorf("generatePrintStatement: unsupported int type %s", t)
 		}
-	case *types.FuncType:
-		formatStr = "<function>"
-		printVal = g.getStringConstant("<function>")
+	case *types.PointerType:
+		// i8* -> string
+		if ptr, ok := t.ElemType.(*types.IntType); ok && ptr.Equal(types.I8) {
+			formatStr = "%s\n"
+			arg = val
+		} else {
+			return nil, fmt.Errorf("generatePrintStatement: unsupported pointer type %s", t)
+		}
 	default:
-		return nil, fmt.Errorf("unsupported type for print: %s", val.Type())
+		return nil, fmt.Errorf("generatePrintStatement: unsupported type %s", val.Type())
 	}
 
-	formatStrConst := g.getStringConstant(formatStr)
-	printfFn := g.printfFunc
-	if printfFn == nil {
-		fmt.Fprintf(os.Stderr, "ERROR: printf function not found\n")
-		return constant.NewInt(types.I32, 0), nil
-	}
+	// Create or reuse the global constant for the format string
+	fmtConst := g.getStringConstant(formatStr)
 
-	// Create a new function type for printf with the correct signature
-	printfType := types.NewFunc(types.I32, types.NewPointer(types.I8))
-	printfFn.Sig = printfType
-	printfFn.Sig.Variadic = true
+	// And finally emit the call to the variadic printf we declared in New()
+	// Note: g.printfFunc was declared once as `i32 @printf(i8*, ...)`
+	fmt.Printf("debugging printfFunc: %T", g.printfFunc)
+	call := current.NewCall(g.printfFunc, fmtConst, arg)
 
-	result := currentBlock.NewCall(g.printfFunc, formatStrConst, printVal)
-	return result, nil
+	return call, nil
 }
 
 func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression) (value.Value, error) {
@@ -1007,13 +991,20 @@ func fixFunctionDeclarations(ir string) string {
 
 	ir = regexp.MustCompile(`call\s+i32\s*\([^)]*\)\s*@printf`).ReplaceAllString(ir, "call i32 @printf(i8*, ...)")
 
+	//TEST:
+	ir = regexp.MustCompile(`\(([^)]*)\)\s*\(\.\.\.\)`).ReplaceAllString(ir, "($1, ...)")
+	// now catch printf specifically and insert the full variadic signature
+	ir = regexp.MustCompile(`call\s+i32\s*\([^)]*\)\s*@printf`).ReplaceAllString(ir, "call i32 (i8*, ...) @printf")
+
 	// Fix getelementptr instructions for printf calls
 	ir = regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "getelementptr [$1 x i8], [$1 x i8]*")
 	ir = regexp.MustCompile(`i8\*\s*getelementptr\(\[(\d+)\s+x\s+i8\],\s*i8\*\s*getelementptr`).ReplaceAllString(ir, "i8* getelementptr([$1 x i8], [$1 x i8]*")
 
-	// Convert array types to pointer types in printf calls
-	// ir = regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*\[(\d+)\s+x\s+i8\]\*\s*(@\.str\.\d+)`).
-	// 	ReplaceAllString(ir, `getelementptr inbounds ([$1 x i8], [$2 x i8]* $3, i64 0, i64 0)`)
+	// Convert array types to pointer types in printf calls (catch the common pattern)
+	// before our existing hack, insert something like:
+	re := regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*\[\d+\s+x\s+i8\]\*\s*(@\.str\.\d+),\s*i64\s+0,\s*i64\s+0`)
+	ir = re.ReplaceAllString(ir,
+		`getelementptr inbounds ([$1 x i8], [$1 x i8]* $2, i64 0, i64 0)`)
 
 	badFuncPattern := regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)`)
 	matches := badFuncPattern.FindAllString(ir, -1)
@@ -1032,12 +1023,7 @@ func fixFunctionDeclarations(ir string) string {
 		return s
 	})
 
-	// before your existing hack, insert something like:
-	re := regexp.MustCompile(`getelementptr\s+\[(\d+)\s+x\s+i8\],\s*\[\d+\s+x\s+i8\]\*\s*(@\.str\.\d+),\s*i64\s+0,\s*i64\s+0`)
-	ir = re.ReplaceAllString(ir,
-		`getelementptr inbounds ([$1 x i8], [$1 x i8]* $2, i64 0, i64 0)`)
-
-	// HACK: NÃO MEXER PELO AMOR DE DEUS
+	//INFO: defines the main function correctly
 	ir = regexp.MustCompile(`define\s+i32\s+\(i32\)\s+@(\w+)\s*\(\)\s*\{`).
 		ReplaceAllString(ir, "define i32 @$1(i32 %n) {")
 	ir = regexp.MustCompile(`declare\s+i8\*\s+\(i64\)\s+@malloc\(\)`).ReplaceAllString(ir, "declare i8* @malloc(i64)")

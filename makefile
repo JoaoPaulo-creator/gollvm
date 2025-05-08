@@ -6,5 +6,5 @@ build:
 compile:
 	./compiler input.toy
 
-run:
-	./input
+clang:
+	clang input.ll -o output
