@@ -569,29 +569,6 @@ func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
 	return exp
 }
 
-// func (p *Parser) parseAssignmentExpression(left ast.Expression) ast.Expression {
-// 	// Only identifiers can be assigned to
-// 	ident, ok := left.(*ast.Identifier)
-// 	if !ok {
-// 		msg := fmt.Sprintf("expected identifier on left side of assignment, got %T at line %d, column %d",
-// 			left, p.curToken.Line, p.curToken.Column)
-// 		p.errors = append(p.errors, msg)
-// 		return nil
-// 	}
-//
-// 	// Create a new assignment expression
-// 	expression := &ast.AssignmentExpression{
-// 		Token: p.curToken,
-// 		Name:  ident,
-// 	}
-//
-// 	precedence := p.curPrecedence()
-// 	p.nextToken()
-// 	expression.Value = p.parseExpression(precedence)
-//
-// 	return expression
-// }
-
 func (p *Parser) parseExpressionList(end lexer.TokenType) []ast.Expression {
 	list := []ast.Expression{}
 
