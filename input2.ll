@@ -56,14 +56,14 @@ define i32 @main() {
 entry:
 	%0 = alloca i32
 	%1 = alloca i32
-	%2 = call i32 () @foo()
-	%3 = call i32 () @foo()
+	%2 = call i32 @foo()
+	%3 = call i32 @foo()
 	%4 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
-	%5 = call i32 () @bar()
-	%6 = call i32 () @bar()
+	%5 = call i32 @bar()
+	%6 = call i32 @bar()
 	%7 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
-	%8 = call i8* () @baz()
-	%9 = call i8* () @baz()
+	%8 = call i8* @baz()
+	%9 = call i8* @baz()
 	%10 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
 	store i32 5, i32* %1
 	%11 = load i32, i32* %1

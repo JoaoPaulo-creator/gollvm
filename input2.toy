@@ -10,4 +10,3 @@ var a = 5;
 var b = a * 2;
 print b;
 print 2 * 2 * 2
-

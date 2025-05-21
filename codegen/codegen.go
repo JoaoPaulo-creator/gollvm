@@ -268,55 +268,67 @@ func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error)
 }
 
 func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Value, error) {
-	fn := g.context.currentFunction
-	current := fn.Blocks[len(fn.Blocks)-1]
+    // Grab the current block
+    fn := g.context.currentFunction
+    current := fn.Blocks[len(fn.Blocks)-1]
 
-	// 1) Evaluate the expression to print
-	val, err := g.generateExpression(stmt.Value)
-	if err != nil {
-		return nil, fmt.Errorf("generatePrintStatement: %w", err)
-	}
+    // 1) Evaluate whatever expression was passed to `print`
+    val, err := g.generateExpression(stmt.Value)
+    if err != nil {
+        return nil, fmt.Errorf("generatePrintStatement: %w", err)
+    }
 
-	// 2) If this is a bare function (no args), invoke it:
-	//    - detect function type
-	if ft, ok := val.Type().(*types.FuncType); ok {
-		if len(ft.Params) != 0 {
-			return nil, fmt.Errorf("generatePrintStatement: cannot print function with %d parameters", len(ft.Params))
-		}
-		// build a CallExpression AST so we reuse our call logic:
-		callExpr := &ast.CallExpression{
-			Function:  stmt.Value,
-			Arguments: []ast.Expression{}, // zero args
-		}
-		val, err = g.generateCallExpression(callExpr)
-		if err != nil {
-			return nil, err
-		}
-	}
+    // 2) If it’s a bare function (no args), invoke it now:
+    switch ty := val.Type().(type) {
+    case *types.FuncType:
+        // raw function value
+        if len(ty.Params) == 0 {
+            callExpr := &ast.CallExpression{
+                Function:  stmt.Value,
+                Arguments: []ast.Expression{}, // zero args
+            }
+            val, err = g.generateCallExpression(callExpr)
+            if err != nil {
+                return nil, fmt.Errorf("generatePrintStatement: %w", err)
+            }
+        }
+    case *types.PointerType:
+        // pointer to a function
+        if ft, ok := ty.ElemType.(*types.FuncType); ok && len(ft.Params) == 0 {
+            callExpr := &ast.CallExpression{
+                Function:  stmt.Value,
+                Arguments: []ast.Expression{},
+            }
+            val, err = g.generateCallExpression(callExpr)
+            if err != nil {
+                return nil, fmt.Errorf("generatePrintStatement: %w", err)
+            }
+        }
+    }
 
-	// 3) Now val is the *return value* of whatever we printed.
-	//    Pick format‐string + arg exactly as before:
-	t := val.Type()
-	var fmtStr string
-	var arg value.Value
+    // 3) Now val is the *return value* of whatever we printed.
+    //    Pick format‐string + arg based on its concrete type:
+    t := val.Type()
+    var fmtStr string
+    var arg value.Value
 
-	if t.Equal(types.I1) {
-		fmtStr, arg = "%d\n", current.NewZExt(val, types.I32)
-	} else if t.Equal(types.I32) {
-		fmtStr, arg = "%d\n", val
-	} else if t.Equal(types.Float) {
-		fmtStr, arg = "%f\n", current.NewFPExt(val, types.Double)
-	} else if t.Equal(types.Double) {
-		fmtStr, arg = "%f\n", val
-	} else if ptr, ok := t.(*types.PointerType); ok && ptr.ElemType.Equal(types.I8) {
-		fmtStr, arg = "%s\n", val
-	} else {
-		return nil, fmt.Errorf("generatePrintStatement: unsupported type %s", t)
-	}
+    if t.Equal(types.I1) {
+        fmtStr, arg = "%d\n", current.NewZExt(val, types.I32)
+    } else if t.Equal(types.I32) {
+        fmtStr, arg = "%d\n", val
+    } else if t.Equal(types.Float) {
+        fmtStr, arg = "%f\n", current.NewFPExt(val, types.Double)
+    } else if t.Equal(types.Double) {
+        fmtStr, arg = "%f\n", val
+    } else if ptr, ok := t.(*types.PointerType); ok && ptr.ElemType.Equal(types.I8) {
+        fmtStr, arg = "%s\n", val
+    } else {
+        return nil, fmt.Errorf("generatePrintStatement: unsupported type %s", t)
+    }
 
-	// 4) Emit printf
-	fmtConst := g.getStringConstant(fmtStr)
-	return current.NewCall(g.printfFunc, fmtConst, arg), nil
+    // 4) Finally, emit the printf call
+    str := g.getStringConstant(fmtStr)
+    return current.NewCall(g.printfFunc, str, arg), nil
 }
 
 func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression) (value.Value, error) {
@@ -999,22 +1011,27 @@ func fixFunctionDeclarations(ir string) string {
 
 	// 2) Prepend exactly one correct set of standard declarations
 	ir = getStandardFunctionDeclarations() + "\n" + ir
-
 	fmt.Fprintf(os.Stderr, "DEBUG: IR after decl-fix:\n%s\n", ir)
 
-	// 3) Remove any lingering mangled signature before @printf in call sites:
-	//    e.g. 'call i32 (i8*) (...) @printf(...)' -> 'call i32 @printf'
+	// 3) Fix all user-function calls: remove the extra `()` signature
+	//    e.g. turn “call i32 () @foo()” into “call i32 @foo()”
+	ir = regexp.MustCompile(
+		`call\s+(\S+)\s*\(\)\s*@(\w+)\(\)`,
+	).ReplaceAllString(ir, "call $1 @$2()")
+
+	// 4) Remove any lingering mangled signature before @printf in call sites:
+	//    e.g. ‘call i32 (i8*) (…) @printf(...)’ → ‘call i32 @printf’
 	ir = regexp.MustCompile(
 		`call\s+i32\s*\([^)]*\)\s*\([^)]*\)\s*@printf`,
 	).ReplaceAllString(ir, "call i32 @printf")
 
-	// 4) Normalize main function signature to valid IR
+	// 5) Normalize main function signature to valid IR
 	ir = regexp.MustCompile(
 		`define\s+[^@]+\s+@main\s*\([^)]*\)\s*(?:#[0-9]+)?\s*{`,
 	).ReplaceAllString(ir, "define i32 @main() {")
 
-	// 5) Fix other function definitions that include an empty '()' in the return-type position:
-	//    e.g. 'define i32 () @foo()' -> 'define i32 @foo()'
+	// 6) Fix other function definitions that include an empty ‘()’ in the return-type:
+	//    e.g. ‘define i32 () @bar()’ → ‘define i32 @bar()’
 	ir = regexp.MustCompile(
 		`define\s+(\S+)\s*\(\)\s+@(\w+)\(\)`,
 	).ReplaceAllString(ir, "define $1 @$2()")
