@@ -268,67 +268,73 @@ func (g *Generator) generateExpression(expr ast.Expression) (value.Value, error)
 }
 
 func (g *Generator) generatePrintStatement(stmt *ast.PrintStatement) (value.Value, error) {
-    // Grab the current block
-    fn := g.context.currentFunction
-    current := fn.Blocks[len(fn.Blocks)-1]
+	// Get current function and block
+	fn := g.context.currentFunction
+	current := fn.Blocks[len(fn.Blocks)-1]
 
-    // 1) Evaluate whatever expression was passed to `print`
-    val, err := g.generateExpression(stmt.Value)
-    if err != nil {
-        return nil, fmt.Errorf("generatePrintStatement: %w", err)
-    }
+	// 1) Evaluate the expression (load variables, handle call-exprs)
+	rawVal, err := g.generateExpression(stmt.Value)
+	if err != nil {
+		return nil, fmt.Errorf("generatePrintStatement: %w", err)
+	}
 
-    // 2) If it’s a bare function (no args), invoke it now:
-    switch ty := val.Type().(type) {
-    case *types.FuncType:
-        // raw function value
-        if len(ty.Params) == 0 {
-            callExpr := &ast.CallExpression{
-                Function:  stmt.Value,
-                Arguments: []ast.Expression{}, // zero args
-            }
-            val, err = g.generateCallExpression(callExpr)
-            if err != nil {
-                return nil, fmt.Errorf("generatePrintStatement: %w", err)
-            }
-        }
-    case *types.PointerType:
-        // pointer to a function
-        if ft, ok := ty.ElemType.(*types.FuncType); ok && len(ft.Params) == 0 {
-            callExpr := &ast.CallExpression{
-                Function:  stmt.Value,
-                Arguments: []ast.Expression{},
-            }
-            val, err = g.generateCallExpression(callExpr)
-            if err != nil {
-                return nil, fmt.Errorf("generatePrintStatement: %w", err)
-            }
-        }
-    }
+	var val value.Value
+	// 2) If rawVal is a function or function pointer, bitcast to a ptr-to-func and call
+	switch rv := rawVal.(type) {
+	case *ir.Func:
+		// raw function definition
+		ptrTy := types.NewPointer(rv.Sig)
+		callee := current.NewBitCast(rv, ptrTy)
+		val = current.NewCall(callee)
+	default:
+		// not a raw *ir.Func, check its type
+		switch t := rawVal.Type().(type) {
+		case *types.PointerType:
+			if _, ok := t.ElemType.(*types.FuncType); ok {
+				val = current.NewCall(rawVal)
+				break
+			}
+		case *types.FuncType:
+			// function value without ptr
+			ptrTy := types.NewPointer(t)
+			callee := current.NewBitCast(rawVal, ptrTy)
+			val = current.NewCall(callee)
+		default:
+			// normal value (int, ptr to i8, etc.)
+			val = rawVal
+			// normal value (int, ptr to i8, etc.)
+			val = rawVal
+		}
+	}
 
-    // 3) Now val is the *return value* of whatever we printed.
-    //    Pick format‐string + arg based on its concrete type:
-    t := val.Type()
-    var fmtStr string
-    var arg value.Value
+	// 3) Format 'val' based on its LLVM type
+	var fmtStr string
+	var arg value.Value
+	switch t := val.Type().(type) {
+	case *types.IntType:
+		if t.Equal(types.I1) {
+			fmtStr, arg = "%d", current.NewZExt(val, types.I32)
+		} else {
+			fmtStr, arg = "%d", val
+		}
+	case *types.FloatType:
+		// float → extend to double for printf
+		fmtStr, arg = "%f", current.NewFPExt(val, types.Double)
+	case *types.PointerType:
+		if t.ElemType.Equal(types.I8) {
+			fmtStr, arg = "%s", val
+		} else {
+			return nil, fmt.Errorf("generatePrintStatement: unsupported ptr type %s", t)
+		}
+	default:
+		return nil, fmt.Errorf("generatePrintStatement: unsupported type %T", t)
+	}
 
-    if t.Equal(types.I1) {
-        fmtStr, arg = "%d\n", current.NewZExt(val, types.I32)
-    } else if t.Equal(types.I32) {
-        fmtStr, arg = "%d\n", val
-    } else if t.Equal(types.Float) {
-        fmtStr, arg = "%f\n", current.NewFPExt(val, types.Double)
-    } else if t.Equal(types.Double) {
-        fmtStr, arg = "%f\n", val
-    } else if ptr, ok := t.(*types.PointerType); ok && ptr.ElemType.Equal(types.I8) {
-        fmtStr, arg = "%s\n", val
-    } else {
-        return nil, fmt.Errorf("generatePrintStatement: unsupported type %s", t)
-    }
-
-    // 4) Finally, emit the printf call
-    str := g.getStringConstant(fmtStr)
-    return current.NewCall(g.printfFunc, str, arg), nil
+	// 4) Prepare printf callee (bitcast to ptr-to-func) and emit printf call
+	printfPtrTy := types.NewPointer(g.printfFunc.Sig)
+	printfCallee := constant.NewBitCast(g.printfFunc, printfPtrTy)
+	formatConstant := g.getStringConstant(fmtStr)
+	return current.NewCall(printfCallee, formatConstant, arg), nil
 }
 
 func (g *Generator) generateAssignmentExpression(expr *ast.AssignmentExpression) (value.Value, error) {
@@ -432,6 +438,12 @@ func (g *Generator) generateBlockStatement(stmt *ast.BlockStatement) (value.Valu
 
 	var lastVal value.Value
 	for i, s := range stmt.Statements {
+		// Check if the statement is a return statement
+		if retStmt, ok := s.(*ast.ReturnStatement); ok {
+			val, err := g.generateReturnStatement(retStmt)
+			g.context = oldContext
+			return val, err
+		}
 		val, err := g.generateStatement(s)
 		if err != nil {
 			g.context = oldContext
@@ -864,7 +876,8 @@ func (g *Generator) generateCallExpression(expr *ast.CallExpression) (value.Valu
 
 	var callableFunction value.Value
 	if fn, ok := function.(*ir.Func); ok {
-		callableFunction = fn
+		ptrTy := types.NewPointer(fn.Sig)
+		callableFunction = constant.NewBitCast(fn, ptrTy)
 	} else if funcPtr, ok := function.Type().(*types.PointerType); ok {
 		if _, ok := funcPtr.ElemType.(*types.FuncType); ok {
 			callableFunction = function

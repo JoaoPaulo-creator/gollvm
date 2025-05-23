@@ -13,8 +13,9 @@ declare void @exit(i32)
 @.fmt.int = private constant [4 x i8] c"%d\0A\00"
 @.fmt.str = private constant [3 x i8] c"%s\00"
 
-@.str.0 = global [21 x i8] c"this return a string\00"
-@.str.1 = global [4 x i8] c"%d\0A\00"
+@.str.0 = global [34 x i8] c"a string returned from a function\00"
+@.str.1 = global [3 x i8] c"%d\00"
+@.str.2 = global [3 x i8] c"%s\00"
 
 
 
@@ -44,35 +45,38 @@ entry:
 
 define i32 @bar() {
 entry:
-	ret i32 2
+	ret i32 42
 }
 
 define i8* @baz() {
 entry:
-	ret i8* getelementptr ([21 x i8], [21 x i8]* @.str.0, i64 0, i64 0)
+	ret i8* getelementptr ([34 x i8], [34 x i8]* @.str.0, i64 0, i64 0)
 }
 
 define i32 @main() {
 entry:
 	%0 = alloca i32
 	%1 = alloca i32
-	%2 = call i32 @foo()
-	%3 = call i32 @foo()
-	%4 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
-	%5 = call i32 @bar()
-	%6 = call i32 @bar()
-	%7 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
-	%8 = call i8* @baz()
-	%9 = call i8* @baz()
-	%10 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 0)
+	%2 = call i32 () bitcast (i32 () ()* @foo to i32 () ()*)()
+	%3 = bitcast i32 () %2 to i32 ()*
+	%4 = call i32 %3()
+	%5 = call i32 (i8*) (...) bitcast (i32 (i8*) (...)* @printf to i32 (i8*) (...)*)(i8* getelementptr ([3 x i8], [3 x i8]* @.str.1, i64 0, i64 0), i32 %4)
+	%6 = call i32 () bitcast (i32 () ()* @bar to i32 () ()*)()
+	%7 = bitcast i32 () %6 to i32 ()*
+	%8 = call i32 %7()
+	%9 = call i32 (i8*) (...) bitcast (i32 (i8*) (...)* @printf to i32 (i8*) (...)*)(i8* getelementptr ([3 x i8], [3 x i8]* @.str.1, i64 0, i64 0), i32 %8)
+	%10 = call i8* () bitcast (i8* () ()* @baz to i8* () ()*)()
+	%11 = bitcast i8* () %10 to i8* ()*
+	%12 = call i8* %11()
+	%13 = call i32 (i8*) (...) bitcast (i32 (i8*) (...)* @printf to i32 (i8*) (...)*)(i8* getelementptr ([3 x i8], [3 x i8]* @.str.2, i64 0, i64 0), i8* %12)
 	store i32 5, i32* %1
-	%11 = load i32, i32* %1
-	%12 = mul i32 %11, 2
-	store i32 %12, i32* %0
-	%13 = load i32, i32* %0
-	%14 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 %13)
-	%15 = mul i32 2, 2
-	%16 = mul i32 %15, 2
-	%17 = call i32 @printf(i8* getelementptr ([4 x i8], [4 x i8]* @.str.1, i64 0, i64 0), i32 %16)
+	%14 = load i32, i32* %1
+	%15 = mul i32 %14, 2
+	store i32 %15, i32* %0
+	%16 = load i32, i32* %0
+	%17 = call i32 (i8*) (...) bitcast (i32 (i8*) (...)* @printf to i32 (i8*) (...)*)(i8* getelementptr ([3 x i8], [3 x i8]* @.str.1, i64 0, i64 0), i32 %16)
+	%18 = mul i32 2, 2
+	%19 = mul i32 %18, 2
+	%20 = call i32 (i8*) (...) bitcast (i32 (i8*) (...)* @printf to i32 (i8*) (...)*)(i8* getelementptr ([3 x i8], [3 x i8]* @.str.1, i64 0, i64 0), i32 %19)
 	ret i32 0
 }

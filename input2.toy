@@ -1,6 +1,6 @@
 fn foo() { return 4; }
-fn bar() { return 2; }
-fn baz() { return "this return a string"; }
+fn bar() { return 42; }
+fn baz() { return "a string returned from a function"; }
 
 print foo();
 print bar();
@@ -9,4 +9,4 @@ print baz();
 var a = 5;
 var b = a * 2;
 print b;
-print 2 * 2 * 2
+print 2 * 2 * 2;
